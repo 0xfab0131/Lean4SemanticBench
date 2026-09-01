@@ -315,7 +315,14 @@ console.log("\n=== Lean 側から来た構造化データ ===");
   const withProof = rows.filter((n) => n.valueSize > 0).length;
   const thm = rows.filter((n) => n.kind === "theorem");
   console.log(`  束縛あり ${withBinders} / 結論あり ${withConcl} / 行あり ${withLine} / 証明項あり ${withProof}`);
-  ok(withLine === rows.length, "全宣言に位置情報がある（実装順を再現できる）");
+  // 生成宣言(.ctorIdx / .noConfusionType 等)は自前の range を持たないことがある。
+  // Lean 側は親の行へフォールバックするが、旧形式のレポートも読めるよう、
+  // 検査対象は「生成物(骨組み)を除く全宣言」とする。
+  const lineless = rows.filter((n) => n.line === 0);
+  const linelessReal = lineless.filter((n) => !LDR.roles.isFrameName(n.name));
+  ok(linelessReal.length === 0, "生成物を除く全宣言に位置情報がある（実装順を再現できる）",
+     linelessReal.length ? linelessReal.slice(0, 3).map((n) => short(n.name)).join(", ")
+                         : `位置なしの生成物 ${lineless.length} 件は許容`);
   ok(thm.every((n) => n.valueSize > 0), "全定理の証明項を辿れている",
      `辿れていない定理 ${thm.filter((n) => n.valueSize === 0).length} 件`);
   const axCarrier = rows.filter((n) => n.axioms.length > 0).length;
@@ -365,7 +372,16 @@ console.log("\n=== 法則の在庫 ===");
    同じ扇を共有していたときより一区画あたりのノードが大きく取れるはず。 */
 console.log("\n=== 球面モード（部分グラフごとの扇）===");
 {
-  S.actions.navigate(hub);
+  /* 区画分割(可視ノードが PIN_MAX を超える錐)を実測するため、
+     深さ 2 の依存錐が最大の中心を選ぶ。三方向の均衡で選んだ hub は
+     小さくなりがちで、分割が発火しないままになる。 */
+  let bigHub = hub, bigN = 0;
+  for (const n of S.state.order) {
+    const size = Object.keys(LDR.graph.reachable(n, S.derived.declIdx.dep, 2)).length;
+    if (size > bigN) { bigN = size; bigHub = n; }
+  }
+  console.log(`  中心 = ${short(bigHub)}（深さ 2 の依存錐 ${bigN} ノード）`);
+  S.actions.navigate(bigHub);
   S.actions.setBaseDepth(2);
   const flatW = Object.values(S.derived.posAll).filter((p) => p.cone !== "center").map((p) => p.w);
   const flatAvg = flatW.length ? flatW.reduce((a, b) => a + b, 0) / flatW.length : 0;

@@ -36,8 +36,9 @@
     "Function.comp", "Membership.mem", "Setoid",
   ]);
 
-  /* 名前の形で分かる自動生成物。再帰子・場合分け・内部補助。 */
-  const FRAME_SUFFIX = /(\.rec|\.recOn|\.casesOn|\.brecOn|\.below|\.ndrec|\.noConfusion|\.noConfusionType|\.injEq|\.sizeOf|\.sizeOf_spec|\.mk\.injEq)$/;
+  /* 名前の形で分かる自動生成物。再帰子・場合分け・内部補助。
+     .ctorIdx は構造体ごとに生成される構成子番号（自己解析で検出し追加）。 */
+  const FRAME_SUFFIX = /(\.rec|\.recOn|\.casesOn|\.brecOn|\.below|\.ndrec|\.noConfusion|\.noConfusionType|\.ctorIdx|\.injEq|\.sizeOf|\.sizeOf_spec|\.mk\.injEq)$/;
   const FRAME_INTERNAL = /(^_|\._|\.match_\d|\.proof_\d|\.eq_\d|\.eq_def|\.congr_|\.«)/;
 
   function isFrameName(name) {

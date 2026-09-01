@@ -66,8 +66,9 @@ def asBinApp (e0 : Expr) : Option (Name × Expr × Expr) :=
     構造的等価だけで比べると、暗黙引数の与え方や `mdata` の差で同じものを
     別物と見なし、成り立っている性質を取り逃す。一方で無制限の defeq は
     高価な上に、意図していない同一視まで通してしまう。その中間を取る。 -/
-private def eqv (a b : Expr) : MetaM Bool :=
-  try Meta.withReducible (Meta.isDefEq a b) catch _ => pure (a == b)
+private def eqv (a b : Expr) : MetaM Bool := do
+  if a == b then return true   -- 構造等価の高速路。defeq(heartbeat 消費源)を避ける
+  try Meta.withReducible (Meta.isDefEq a b) catch _ => pure false
 
 /-- 主張の形を判定する。
 
@@ -206,8 +207,13 @@ partial def subjectOf (e : Expr) : Name :=
     else n
   | _ => Name.anonymous
 
-/-- 型 `e` を Π 型の連鎖として展開し、各引数を `BinderInfo` に応じて分類する。 -/
-def classifyArgs (e : Expr) : MetaM ArgClassification :=
+/-- 型 `e` を Π 型の連鎖として展開し、各引数を `BinderInfo` に応じて分類する。
+
+    `withShapes := false` で法則の形の判定(`relShape`)だけを外せる。
+    形の判定は唯一の defeq 消費源であり、heartbeat 上限による実行時例外の
+    源にもなる。その場合も本体(束縛・結論・頭部)は失わない、という
+    段階的縮退のための旗。形は元々「判定できなければ空」が定義済みの意味論。 -/
+def classifyArgs (e : Expr) (withShapes : Bool := true) : MetaM ArgClassification :=
   Meta.forallTelescope e fun fvars body => do
     let mut binders : Array BinderView := #[]
     let mut hyps : Array Expr := #[]
@@ -236,8 +242,11 @@ def classifyArgs (e : Expr) : MetaM ArgClassification :=
       match a.getAppFn with
       | .const n _ => n
       | _          => Name.anonymous
-    let (shape, shapeRel, shapeRel2) ← try relShape hyps body
-      catch _ => pure ("", Name.anonymous, Name.anonymous)
+    let (shape, shapeRel, shapeRel2) ←
+      if withShapes then
+        try relShape hyps body catch _ => pure ("", Name.anonymous, Name.anonymous)
+      else
+        pure ("", Name.anonymous, Name.anonymous)
     return {
       binders, numExplicit := nE, numImplicit := nI, numInst := nC, numHyp := nH,
       conclusion := concl, subject := subjectOf body, head, conclArgs,
@@ -348,11 +357,21 @@ partial def exprSizeAux : Nat → List Expr → Nat → Nat
 def exprSize (e : Expr) (fuel : Nat := 400000) : Nat := exprSizeAux fuel [e] 0
 
 /-- 宣言が書かれている行。`Lean.findDeclarationRanges?`（core）で取る。
-    これが無いと「実装順」を再現できず、名前順で代用するしかなくなる。 -/
+    これが無いと「実装順」を再現できず、名前順で代用するしかなくなる。
+
+    構造体のコンパイラ生成宣言（`.ctorIdx` / `.noConfusionType` 等）は自前の
+    range を持たない（自己解析で 33 件を実測）。その場合は親（所属する
+    構造体など）の行へフォールバックし、実装順の再現を生成物にも及ぼす。 -/
 def declLine (n : Name) : MetaM Nat := do
   match ← Lean.findDeclarationRanges? n with
   | some r => return r.range.pos.line
-  | none   => return 0
+  | none   =>
+    match n with
+    | .str p _ =>
+      match ← Lean.findDeclarationRanges? p with
+      | some r => return r.range.pos.line
+      | none   => return 0
+    | _ => return 0
 
 /-- 帰納型なら構成子、構造体ならフィールド。「この宣言が属する型」を辿る手掛かり。 -/
 def membersOf (env : Environment) (ci : ConstantInfo) : Array Name :=
@@ -459,11 +478,12 @@ def nameArray (s : NameSet) : Array Name :=
 /-- 型と値に共通する観測をまとめる。バッチ用と単一用で同じものを見せるため、
     依存と公理の取り方だけを引数で受け取り、残りはここで揃える。 -/
 def buildReport (env : Environment) (ci : ConstantInfo)
-    (deps : DirectDeps) (ax : Array Name) (valueChars : Nat) : MetaM DeclReport := do
+    (deps : DirectDeps) (ax : Array Name) (valueChars : Nat)
+    (withShapes : Bool := true) : MetaM DeclReport := do
   let name := ci.name
   let type := ci.type
   let isProp ← try Meta.isProp type catch _ => pure false
-  let cls ← try classifyArgs type catch _ => pure {}
+  let cls ← try classifyArgs type withShapes catch _ => pure {}
   let typeStr ← try pure (toString (← Meta.ppExpr type)) catch _ => pure (toString name)
   let doc ← (do pure ((← Lean.findDocString? env name).getD "")) <|> pure ""
   let depMods := deps.all.foldl (init := ({} : NameSet)) fun acc d =>
@@ -530,10 +550,10 @@ def buildReport (env : Environment) (ci : ConstantInfo)
 
 /-- 1 つの `ConstantInfo` から `DeclReport` を構築する（バッチ用、キャッシュ共有）。 -/
 def analyzeDecl (env : Environment) (ci : ConstantInfo) (valueChars : Nat := 0)
-    : CacheM DeclReport := do
+    (withShapes : Bool := true) : CacheM DeclReport := do
   let deps ← directDepsOf env ci.name
   let ax ← Lean.collectAxioms ci.name
-  liftM (buildReport env ci deps ax valueChars)
+  liftM (buildReport env ci deps ax valueChars withShapes)
 
 /-- 単一宣言用。公理は core の `Lean.collectAxioms` をそのまま使う。
     対話コマンドはこちらを通すことで、`#print axioms` と必ず同じ結果になる。 -/

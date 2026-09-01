@@ -49,7 +49,7 @@ usage() {
 $PROG — Lean4SemanticBench 展開コマンド v$L4SB_VERSION
 
   $PROG init   <target-dir> [--force] [--import-graph-rev <rev>]
-  $PROG report <target-dir> [<Module>...] [-o <out>] [--no-build] [--fetch-cache] [-- <decl_report 引数>]
+  $PROG report <target-dir> [<Module>...] [-o <out>] [--no-build] [--fetch-cache] [--import-all] [-- <decl_report 引数>]
   $PROG check  [<report.jsonl> | <target-dir>] [--decl <名前>...]
   $PROG web    [<report.jsonl> | <target-dir>]
   $PROG all    <target-dir> [report と同じ引数...]
@@ -194,6 +194,15 @@ cmd_init() {
   target="$(resolve_target "$target")"
   load_info "$target"
 
+  # 衛星は解析器のモジュール群(LeanDeclReport.*)を対象と同じワークスペースへ
+  # 持ち込むため、対象自身が同名モジュールを提供していると Lake がモジュールの
+  # 曖昧性で停止する(自己解析がこの典型)。誤誘導なエラーで落ちる前に、
+  # 原因と正しい代替(衛星を使わない直接実行)を明示して止める。
+  case " ${L4SB_LIBS:-} " in
+    *" LeanDeclReport "*)
+      die "対象がモジュール LeanDeclReport を提供しており、衛星の解析器と衝突します。自己解析は開発ワークスペースで直接実行してください: cd Graph && lake build decl_report && lake env .lake/build/bin/decl_report <Module> > report.jsonl" ;;
+  esac
+
   local sat="$target/$SAT_DIRNAME"
 
   # importGraph のリビジョン(対象の依存木に居れば継承するので require 自体を生成しない)。
@@ -304,13 +313,17 @@ verify_identity() {  # $1 = target, $2 = sat
 cmd_report() {
   local target="" out="" nobuild=0 fetchcache=0
   local -a mods=() pass=()
-  # `--` 以降は decl_report へそのまま透過する(引数文法を二重実装しない)
+  # `--` 以降は decl_report へそのまま透過する(引数文法を二重実装しない)。
+  # 追記(+=)にすること: 代入だと --import-all 等の先行フラグを上書きしてしまう。
   while [ $# -gt 0 ]; do
     case "$1" in
-      --) shift; pass=("$@"); break ;;
+      --) shift; pass+=("$@"); break ;;
       -o) out="${2:?-o には出力先が必要です}"; shift 2 ;;
       --no-build) nobuild=1; shift ;;
       --fetch-cache) fetchcache=1; shift ;;
+      # モジュールシステムの対象で証明等の非公開情報まで読む(主要フラグなので
+      # -- の奥に隠さず第一級で受け、decl_report へ透過する)
+      --import-all) pass+=("--import-all"); shift ;;
       -*) die "report: 不明なオプション: $1 (decl_report への引数は -- の後に置いてください)" ;;
       *) if [ -z "$target" ]; then target="$1"; else mods+=("$1"); fi; shift ;;
     esac

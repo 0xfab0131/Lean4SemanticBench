@@ -31,6 +31,7 @@ l4sb.sh clean  <target-dir>                 # 衛星を完全削除(対象には
 ```sh
 l4sb.sh report <target> <Module>... -o out.jsonl   # レポートを複写
 l4sb.sh report <target> <Module>... --no-build     # 対象のビルドを省略(危険: olean が古いと結果も古い)
+l4sb.sh report <target> <Module>... --import-all   # モジュールシステムの対象で非公開情報(証明)まで読む
 l4sb.sh report <target> -- --minimal My.Theorem    # -- 以降は decl_report へ透過(最小仮定レポート等)
 l4sb.sh report <target> -- --values 2000           # 証明項の抜粋を含める
 ```
@@ -143,8 +144,20 @@ manifest は公式の `lake update` に書かせ、その直後に**事後検証
 - **モジュールシステム化された対象**(v4.20 以降の `module` ヘッダ採用、
   v4.27 で安定化)では、定理の証明項が import から省略されるため、
   import 越しの宣言の**値依存・証明項サイズが欠け得る**
-  (公理は core の exported 公理表で保たれる)。`import all` 相当での
-  完全な値解析への対応は今後の課題(未実測)。
+  (公理は core の exported 公理表で保たれる)。
+  `report <target> <Mods> --import-all` で非公開情報(証明・private 宣言)
+  まで読み込める。decl_report は証明項を辿れない定理を検出すると stderr で
+  警告するので、**黙って不完全な解析結果になることはない**
+  (`Import.importAll` は v4.30.0 / v4.33.0 でフィールド一致を確認済み。
+  モジュールシステム実対象での実測は今後の課題)。
+- **実行時例外(heartbeat 上限等)は宣言単位で隔離**される。まず法則の形の
+  判定(唯一の defeq 消費源)だけを諦めて本体(依存・公理・サイズ)を回収し
+  (stderr に注記)、それでも失敗した宣言のみ飛ばして警告する。
+  一宣言の暴走が解析全体を殺すことも、黙って欠けることもない。
+- **自己解析の制限**: 対象がモジュール `LeanDeclReport` を提供する場合
+  (このリポジトリ自身など)、衛星の解析器とモジュール名が衝突するため
+  init が明示エラーで停止する。自己解析は `make -f Makefile.dev self`
+  (開発ワークスペースでの直接実行+検査)を使う。
 
 ## ファイル構成
 
