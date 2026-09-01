@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ja" class="h-full">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lean 宣言依存エクスプローラ</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    darkMode: "class",
+    theme: { extend: { fontFamily: {
+      mono: ['ui-monospace','SFMono-Regular','Menlo','Consolas','monospace'],
+      sans: ['system-ui','-apple-system','Hiragino Sans','Noto Sans JP','sans-serif'],
+    } } }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/p5@1/lib/p5.min.js"></script>
+
+<style>
+  html, body { height: 100%; overscroll-behavior: none; }
+  /* アプリシェルを viewport 高に固定するのでドキュメントはスクロールしない。
+     これによりキャンバス上のホイールを曖昧さなく拡大縮小に割り当てられる。 */
+  body { overflow: hidden; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #d6d3d1; border-radius: 5px; }
+  .dark ::-webkit-scrollbar-thumb { background: #44403c; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  input[type=range] { accent-color: #6366f1; }
+  #toast { transition: opacity .25s ease; }
+  /* パネルの幅を掴んで変えるための帯 */
+  .resizer { flex: 0 0 5px; cursor: col-resize; background: transparent; position: relative; }
+  .resizer::after { content:""; position:absolute; inset:0 2px; background:transparent; }
+  .resizer:hover::after, .resizer.on::after { background:#6366f1; }
+  .noselect, .noselect * { user-select: none !important; }
+  /* 集中表示では操作列を消さず、キャンバスの上に浮かせて残す。
+     必要な操作まで消えてしまうと、集中どころか手が止まる。 */
+  #toolRow.focus-min {
+    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    z-index: 20; width: auto; max-width: calc(100% - 24px);
+    border: 1px solid rgba(120,113,108,.28); border-radius: 14px;
+    background: rgba(255,255,255,.90); backdrop-filter: blur(8px);
+    box-shadow: 0 6px 24px rgba(0,0,0,.10); padding: 4px 10px; gap: .5rem;
+  }
+  .dark #toolRow.focus-min {
+    background: rgba(28,25,23,.90); border-color: rgba(120,113,108,.35);
+    box-shadow: 0 6px 24px rgba(0,0,0,.45);
+  }
+  #toolRow.focus-min > label { display: none; }
+  #toolRow.focus-min #segEdge, #toolRow.focus-min #segRef { display: none; }
+</style>
+</head>
+
+<body class="h-full bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100 font-sans antialiased">
+<div class="h-full flex flex-col">
+
+  <!-- ============ 上部バー ============ -->
+  <header class="shrink-0 h-12 px-3 flex items-center gap-2 border-b border-stone-200 dark:border-stone-800
+                 bg-white/80 dark:bg-stone-900/80 backdrop-blur">
+    <button id="btnSide" class="shrink-0 w-9 h-9 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-500 text-[16px]" title="一覧の開閉">☰</button>
+    <span class="shrink-0 text-[14px] font-medium tracking-tight hidden lg:inline">Lean 宣言依存</span>
+    <div class="shrink-0 w-px h-5 bg-stone-200 dark:bg-stone-700 mx-1"></div>
+    <!-- 長い宣言名がボタン列に食い込まないよう、ここだけが縮む -->
+    <div id="crumb" class="flex-1 min-w-0 overflow-hidden px-1"></div>
+    <button id="btnPinAdd" class="shrink-0 px-3 h-9 rounded-md text-[13px] border border-stone-300 dark:border-stone-600
+            hover:bg-stone-100 dark:hover:bg-stone-800" title="いまの閲覧状態をピン留め (p)">📌 ピン</button>
+    <button id="btnData" class="shrink-0 px-3 h-9 rounded-md text-[13px] border border-stone-300 dark:border-stone-600
+            hover:bg-stone-100 dark:hover:bg-stone-800">データ</button>
+    <button id="btnSideR" class="shrink-0 w-9 h-9 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-500 text-[16px]" title="右パネルの開閉">▤</button>
+    <button id="themeBtn" class="shrink-0 w-9 h-9 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-[15px]" title="配色切替">
+      <span id="themeIcon">☀</span></button>
+  </header>
+
+  <div class="flex-1 flex min-h-0">
+
+    <!-- ============ 左: 宣言一覧 ============ -->
+    <aside id="sidebar" class="flex flex-col shrink-0 border-r border-stone-200 dark:border-stone-800
+                               bg-white dark:bg-stone-900" style="width:264px">
+      <div class="p-2 space-y-2 border-b border-stone-200 dark:border-stone-800">
+        <input id="search" type="text" placeholder="検索  ( / )"
+          class="w-full h-9 px-3 text-[12.5px] rounded-md bg-stone-100 dark:bg-stone-800
+                 border border-transparent focus:border-indigo-400 focus:bg-white dark:focus:bg-stone-900 outline-none">
+        <div id="auditBar" class="flex flex-wrap gap-1"></div>
+        <div id="segList" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800"></div>
+        <div id="metricWrap" class="hidden space-y-1">
+          <div id="segMetric" class="flex flex-wrap gap-0.5"></div>
+          <div class="text-[10px] text-stone-400 leading-snug">
+            <span class="font-medium">↑</span> の付いた尺度は依存順序と両立します。
+            昇順に読めば前提が必ず先に来ます。<span id="metricNote"></span>
+          </div>
+        </div>
+      </div>
+      <div class="px-2.5 pt-2 pb-1 flex items-center justify-between shrink-0">
+        <span class="text-[11px] uppercase tracking-wide text-stone-400">宣言</span>
+        <span id="listCount" class="text-[11px] text-stone-400"></span>
+      </div>
+      <!-- 仮想化のため relative。行は js/panels.js が絶対配置で流し込む -->
+      <div id="declList" class="flex-1 overflow-y-auto relative pb-2"></div>
+    </aside>
+    <div class="resizer" data-resize="left"></div>
+
+    <!-- ============ 中央 ============ -->
+    <main class="relative flex-1 flex flex-col min-w-0">
+
+      <!-- 詳細 -->
+      <section id="inspector" class="shrink-0 px-4 py-2.5 border-b border-stone-200 dark:border-stone-800
+                                     bg-white dark:bg-stone-900"></section>
+
+      <!-- 操作列。よく使うものだけを並べ、残りは「表示」に畳む -->
+      <!-- overflow を持たせると、中の「表示 ▾」の浮遊メニューが切り取られる。
+           横に溢れさせず、狭いときは折り返す。 -->
+      <div id="toolRow" class="shrink-0 px-3 py-1.5 flex items-center gap-x-2 gap-y-1.5 flex-wrap
+                  border-b border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-stone-950">
+        <label class="text-[12px] text-stone-500 shrink-0">上錐</label>
+        <div id="segEdge" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800 shrink-0"></div>
+        <label class="text-[12px] text-stone-500 shrink-0">下錐</label>
+        <div id="segRef" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800 shrink-0"></div>
+        <label class="flex items-center gap-1.5 text-[12px] text-stone-500 shrink-0">
+          展開
+          <input id="depthRange" type="range" min="1" max="3" step="1" value="1" class="w-16">
+          <span id="depthVal" class="w-2">1</span>
+        </label>
+        <button id="btnSphere" class="px-2 py-1 rounded-md text-[12px] border border-stone-300 dark:border-stone-600
+                hover:bg-stone-100 dark:hover:bg-stone-800 shrink-0"
+                title="部分グラフごとに扇をまるごと与え、経度で切り替える (b)">球面</button>
+        <button id="btnFocus" class="px-2 py-1 rounded-md text-[12px] border border-stone-300 dark:border-stone-600
+                hover:bg-stone-100 dark:hover:bg-stone-800 shrink-0"
+                title="中央と右パネルだけにする (f)">集中</button>
+        <!-- 球面モードのとき、いまどの区画に止まっているかを常に示す。
+             経度は等分なので ◀ ▶ の一押しは常に同じ角度。 -->
+        <span id="spinBar" class="hidden items-center gap-1 shrink-0 pl-1">
+          <button data-spin="-1" class="w-7 h-7 rounded-md hover:bg-stone-200 dark:hover:bg-stone-700 text-[13px]"
+                  title="前の区画へ ( [ )">◀</button>
+          <span id="spinLabel" class="text-[12px] tabular-nums min-w-[7.5rem] text-center"></span>
+          <button data-spin="1" class="w-7 h-7 rounded-md hover:bg-stone-200 dark:hover:bg-stone-700 text-[13px]"
+                  title="次の区画へ ( ] )">▶</button>
+        </span>
+        <button id="btnCollapse" class="hidden px-2 py-1 rounded-md text-[11.5px] shrink-0
+                bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 dark:hover:bg-stone-600"></button>
+
+        <!-- 浮遊メニューは fixed。祖先の overflow や重なり順に左右されないようにする。
+             位置は index.js が開いたときに summary の座標から決める。 -->
+        <details id="dView" class="shrink-0">
+          <summary class="px-2 py-1 rounded-md text-[12px] border border-stone-300 dark:border-stone-600
+                          hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer select-none list-none">表示 ▾</summary>
+          <div id="dViewPanel" class="fixed z-50 w-[min(420px,86vw)] p-3 space-y-2 rounded-lg shadow-xl
+                      bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700">
+            <label class="flex items-center gap-2 text-[11.5px] text-stone-500">粒度
+              <span id="segGran" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800"></span></label>
+            <label class="flex items-center gap-2 text-[11.5px] text-stone-500">束ね
+              <span id="segGroup" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800"></span></label>
+            <label class="flex items-center gap-2 text-[11.5px] text-stone-500" title="1 層に描く上限。溢れた件数は環に出る">層上限
+              <span id="segDensity" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800"></span></label>
+            <button id="btnFrame" class="px-2 py-1 rounded-md text-[11.5px] border border-stone-300 dark:border-stone-600
+                    hover:bg-stone-100 dark:hover:bg-stone-800 w-full text-left"
+                    title="And.intro / PSigma.mk / 再帰子などの論理の骨組みを潰し、辺を通り抜けさせる">骨組みを畳む</button>
+            <div class="pt-1 border-t border-stone-200 dark:border-stone-700">
+              <div class="flex items-center gap-1 flex-wrap">
+                <span class="text-[11.5px] text-stone-500 mr-1">種別</span>
+                <span id="kindChips" class="flex gap-1 flex-wrap"></span>
+                <button id="btnClearKinds" class="px-1.5 py-0.5 rounded text-[11px] text-stone-400 hover:text-stone-700">解除</button>
+              </div>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <!-- グラフ -->
+      <div id="canvasHost" class="flex-1 min-h-0 relative bg-white dark:bg-stone-900">
+        <!-- 探索に一番よく使うので、視線が置かれるキャンバスの内側に置く -->
+        <div class="absolute left-3 bottom-3 z-10 flex items-center gap-1 p-1 rounded-xl
+                    bg-white/90 dark:bg-stone-800/90 border border-stone-200 dark:border-stone-700 shadow-sm backdrop-blur">
+          <button id="btnBack" class="w-10 h-9 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 text-[17px]"
+                  title="ひとつ登る  Ctrl+Z / Backspace / マウスの戻るボタン">←</button>
+          <button id="btnFwd" class="w-10 h-9 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 text-[17px]"
+                  title="ひとつ降りる  Ctrl+Y / マウスの進むボタン">→</button>
+          <div class="w-px h-5 bg-stone-200 dark:bg-stone-600 mx-0.5"></div>
+          <button id="btnZoomOut" class="w-9 h-9 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 text-[15px]">−</button>
+          <button id="btnZoomIn"  class="w-9 h-9 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 text-[15px]">+</button>
+          <button id="btnFit" class="px-2.5 h-9 rounded-lg text-[12.5px] hover:bg-stone-100 dark:hover:bg-stone-700">全体</button>
+        </div>
+      </div>
+
+      <!-- 最小の仮定。畳めるようにして、開いたときは十分な高さを取る -->
+      <!-- 既定では畳む。開きっぱなしだとグラフの高さを常に奪い、しかも中身は
+           折り返して見切れる。件数は見出しに出しておくので閉じていても分かる。 -->
+      <details id="minimalWrap" class="shrink-0 border-t border-stone-200 dark:border-stone-800
+                                       bg-white dark:bg-stone-900">
+        <summary class="px-4 py-1.5 cursor-pointer select-none flex items-baseline gap-2
+                        hover:bg-stone-50 dark:hover:bg-stone-800/50">
+          <span class="text-[12px] font-medium">真の極小元 min(↓d)</span>
+          <span id="minCount" class="text-[11px] text-stone-500"></span>
+        </summary>
+        <section id="minimalBox" class="px-4 pb-2 max-h-[32vh] overflow-y-auto"></section>
+      </details>
+    </main>
+
+    <!-- ============ 右: 依存・参照 / 履歴 / ピン ============ -->
+    <div class="resizer" data-resize="right"></div>
+    <aside id="sideR" class="flex flex-col shrink-0 border-l border-stone-200 dark:border-stone-800
+                  bg-white dark:bg-stone-900" style="width:312px">
+      <div id="depTabs" class="shrink-0 p-2 flex gap-1 flex-wrap border-b border-stone-200 dark:border-stone-800"></div>
+      <div id="depBody" class="flex-1 min-h-0 overflow-y-auto p-1.5"></div>
+
+      <!-- 下の三つは既定で畳む。常時開いていると本文の高さを奪う -->
+      <details id="dHist" class="shrink-0 border-t border-stone-200 dark:border-stone-800">
+        <summary class="px-3 py-1.5 cursor-pointer flex items-center gap-2 select-none
+                        hover:bg-stone-50 dark:hover:bg-stone-800/50">
+          <span class="text-[11px] uppercase tracking-wide text-stone-400">探索履歴</span>
+          <span id="histCount" class="text-[10.5px] text-stone-400"></span>
+          <span class="flex-1"></span>
+          <button id="btnHistClear" class="text-[10.5px] px-1.5 py-0.5 rounded text-stone-400 hover:text-stone-700
+                  hover:bg-stone-100 dark:hover:bg-stone-800">消去</button>
+        </summary>
+        <div id="histBody" class="max-h-44 overflow-y-auto px-1.5 pb-1.5"></div>
+      </details>
+
+      <details id="dPin" class="shrink-0 border-t border-stone-200 dark:border-stone-800">
+        <summary class="px-3 py-1.5 cursor-pointer flex items-center gap-1.5 select-none
+                        hover:bg-stone-50 dark:hover:bg-stone-800/50">
+          <span class="text-[11px] uppercase tracking-wide text-stone-400">ピン留め</span>
+          <span id="pinCount" class="text-[10.5px] text-stone-400"></span>
+          <span class="flex-1"></span>
+          <button id="btnPinCopy" class="text-[10.5px] px-1.5 py-0.5 rounded text-stone-400 hover:text-stone-700
+                  hover:bg-stone-100 dark:hover:bg-stone-800" title="全ピンを JSON でクリップボードへ">コピー</button>
+          <button id="btnPinSave" class="text-[10.5px] px-1.5 py-0.5 rounded text-stone-400 hover:text-stone-700
+                  hover:bg-stone-100 dark:hover:bg-stone-800" title="全ピンを JSON ファイルに保存">保存</button>
+          <button id="btnPinLoad" class="text-[10.5px] px-1.5 py-0.5 rounded text-stone-400 hover:text-stone-700
+                  hover:bg-stone-100 dark:hover:bg-stone-800" title="JSON ファイルから取り込み">取込</button>
+          <input id="pinFile" type="file" accept=".json" class="hidden">
+        </summary>
+        <div id="pinBody" class="max-h-44 overflow-y-auto px-1.5 pb-1.5"></div>
+      </details>
+
+      <details id="dHelp" class="shrink-0 border-t border-stone-200 dark:border-stone-800">
+        <summary class="px-3 py-1.5 cursor-pointer select-none text-[11px] uppercase tracking-wide
+                        text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800/50">凡例と操作</summary>
+        <div class="px-3 pb-2 text-[11px] text-stone-500 dark:text-stone-400 leading-relaxed space-y-1">
+          <div><span style="color:#4F46E5">━</span> 型依存
+            <span style="color:#7C3AED">╌</span> 値依存<span class="text-stone-400">（上・中心が使う側）</span></div>
+          <div><span style="color:#0F766E">━</span> 主張で参照
+            <span style="color:#C2410C">╌</span> 証明で参照<span class="text-stone-400">（下・中心を使う側）</span></div>
+          <div>単クリック 選択（移動しない） / ダブルクリック 移動</div>
+          <div>ℓ は中心からの最長導出鎖の長さ</div>
+          <div>球面モードでは地球儀を掴んで回すと正面の区画が変わる（Shift+ホイールでも）</div>
+          <div><kbd>/</kbd>検索 <kbd>t</kbd>型のみ <kbd>m</kbd>粒度 <kbd>v</kbd>下錐 <kbd>b</kbd>球面 <kbd>p</kbd>ピン <kbd>0</kbd>全体 <kbd>f</kbd>集中</div>
+        </div>
+      </details>
+    </aside>
+  </div>
+</div>
+
+<!-- ============ データ読み込み ============ -->
+<dialog id="dataDlg" class="rounded-xl p-0 w-[min(760px,92vw)] bg-white dark:bg-stone-900
+        text-stone-900 dark:text-stone-100 shadow-2xl border border-stone-200 dark:border-stone-700">
+  <div class="p-4 space-y-3">
+    <div class="flex items-center justify-between">
+      <h2 class="text-[15px] font-medium">レポートの読み込み</h2>
+      <button id="dataClose" class="w-8 h-8 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800">✕</button>
+    </div>
+
+    <div class="flex flex-wrap gap-2">
+      <button id="dataDefault" class="px-3 py-1.5 rounded-md text-[12.5px] bg-indigo-600 text-white hover:bg-indigo-500">
+        既定の監査結果を読み込む</button>
+      <button id="dataSample" class="px-3 py-1.5 rounded-md text-[12.5px] border border-stone-300 dark:border-stone-600
+              hover:bg-stone-100 dark:hover:bg-stone-800">サンプルで試す</button>
+      <span class="flex-1"></span>
+      <button id="dataForget" class="px-2.5 py-1.5 rounded-md text-[12.5px] text-stone-500
+              hover:bg-stone-100 dark:hover:bg-stone-800">保持データを消去</button>
+    </div>
+    <p id="dataStatus" class="text-[12px] text-stone-500 leading-relaxed"></p>
+
+    <p class="text-[12.5px] text-stone-500 leading-relaxed">
+      <code class="font-mono">lake exe decl_report &lt;Module&gt; &gt; report.jsonl</code> の出力を貼り付けるか、
+      ファイルを選択してください。ウィンドウへのドロップでも読み込めます。
+      一度読み込んだものはブラウザ内に保持され、次回は自動で復元されます。
+    </p>
+    <input id="fileInput" type="file" accept=".jsonl,.json,.txt"
+           class="text-[12.5px] file:mr-2 file:px-2 file:py-1 file:rounded file:border-0
+                  file:bg-stone-200 dark:file:bg-stone-700 file:text-[12.5px]">
+    <textarea id="dataText" rows="9" spellcheck="false"
+      class="w-full font-mono text-[11.5px] leading-relaxed p-2 rounded-lg
+             bg-stone-50 dark:bg-stone-950 border border-stone-200 dark:border-stone-700 outline-none
+             focus:border-indigo-400"></textarea>
+    <div class="flex justify-end gap-2">
+      <button id="dataApply" class="px-3 py-1.5 rounded-md text-[13px] bg-indigo-600 text-white hover:bg-indigo-500">貼り付けた内容を読み込む</button>
+    </div>
+  </div>
+</dialog>
+
+<div id="toast" class="fixed left-1/2 -translate-x-1/2 bottom-6 px-3.5 py-2 rounded-lg text-[13px]
+     bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 shadow-lg opacity-0 pointer-events-none z-50"></div>
+
+<script src="js/graph.js"></script>
+<script src="js/sig.js"></script>
+<script src="js/roles.js"></script>
+<script src="js/sample.js"></script>
+<script src="js/persist.js"></script>
+<script src="js/store.js"></script>
+<script src="js/canvas.js"></script>
+<script src="js/panels.js"></script>
+<script src="index.js"></script>
+</body>
+</html>

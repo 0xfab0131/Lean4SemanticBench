@@ -1,0 +1,6 @@
+/.lake
+# 解析の成果物(l4sb.sh report / web が生成・複写する)
+report.jsonl
+report.meta.json
+# report.jsonl を Web へ埋め込んだ生成物(make_default_report.js が作る)
+Web/js/default-report.js
