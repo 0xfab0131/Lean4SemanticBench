@@ -79,23 +79,27 @@ private def eqv (a b : Expr) : MetaM Bool :=
       symm               R a b  ⟹  R b a
       trans              R a m, R m b  ⟹  R a b
       antisymm           R a b, R b a  ⟹  a = b （または a ↔ b）
-      comm / assoc / idem  二項演算の可換・結合・冪等
+      total              R a b ∨ R b a （全域性。枠が ∨ のときのチャージ先）
+      comm / assoc / idem  二項演算の可換・結合・冪等（枠は = / ↔ に限る）
+      absorb / distrib   二演算の吸収・分配。第二の担い手も返す
       mono               関係の仮定があり、結論の両辺が同じ頭部の像
 
-    形とあわせて「どの関係・演算についての法則か」も返す。反対称律だけは
-    結論が `Eq` / `Iff` で、対象の関係は仮定側にある。ここを取り違えると
-    法則の在庫表の行がずれるので、判定した場所で確定させておく。 -/
-def relShape (hyps : Array Expr) (body0 : Expr) : MetaM (String × Name) := do
+    各判定は主張を (枠, 担い手, 法則) へ写すチャージであり、枠(外側の結合子)を
+    検査してから担い手を確定する。反対称律は結論が `Eq` / `Iff` で対象の関係が
+    仮定側にあり、全域性は枠が `∨`。枠を見ずにチャージすると、全域性を可換と
+    誤認するような取り違えが起きる（検証フィクスチャで実測済み）。
+    返り値の第三成分は二演算法則（吸収・分配）の相方で、単独法則では anonymous。 -/
+def relShape (hyps : Array Expr) (body0 : Expr) : MetaM (String × Name × Name) := do
   let body := body0.consumeMData
-  let none : String × Name := ("", Name.anonymous)
+  let none : String × Name × Name := ("", Name.anonymous, Name.anonymous)
   -- 非反射律は否定の内側を見る
   if let some (n, _) := body.const? then
     if n == ``Not then
       if let some inner := body.getAppArgs[0]? then
         if let some (r0, a0, b0) := asBinApp inner then
-          if ← eqv a0 b0 then return ("irrefl", r0)
+          if ← eqv a0 b0 then return ("irrefl", r0, Name.anonymous)
   let some (r, a, b) := asBinApp body | return none
-  if ← eqv a b then return ("refl", r)
+  if ← eqv a b then return ("refl", r, Name.anonymous)
   let rels := hyps.map (·.consumeMData) |>.filterMap asBinApp
 
   if r == ``Eq || r == ``Iff then
@@ -103,29 +107,57 @@ def relShape (hyps : Array Expr) (body0 : Expr) : MetaM (String × Name) := do
       for q in rels do
         if p.1 == q.1 then
           if (← eqv p.2.1 a) && (← eqv p.2.2 b) && (← eqv q.2.1 b) && (← eqv q.2.2 a) then
-            return ("antisymm", p.1)          -- 対象の関係は仮定側にある
+            return ("antisymm", p.1, Name.anonymous)   -- 対象の関係は仮定側にある
   for p in rels do
     if p.1 == r then
-      if (← eqv p.2.1 b) && (← eqv p.2.2 a) then return ("symm", r)
+      if (← eqv p.2.1 b) && (← eqv p.2.2 a) then return ("symm", r, Name.anonymous)
   for p in rels do
     for q in rels do
       if p.1 == r && q.1 == r then
-        if (← eqv p.2.1 a) && (← eqv q.2.2 b) && (← eqv p.2.2 q.2.1) then return ("trans", r)
+        if (← eqv p.2.1 a) && (← eqv q.2.2 b) && (← eqv p.2.2 q.2.1) then
+          return ("trans", r, Name.anonymous)
 
-  -- 二項演算の法則。両辺が同じ演算の像になっている場合だけ見る。
-  if let some (f, x, y) := asBinApp a then
-    if let some (g, u, v) := asBinApp b then
-      if f == g then
-        if (← eqv x v) && (← eqv y u) then return ("comm", f)
-        if let some (f', x', y') := asBinApp x then
-          if let some (g', u', v') := asBinApp v then
-            if f' == f && g' == f then
-              if (← eqv x' u) && (← eqv y' u') && (← eqv y v') then return ("assoc", f)
-    if (← eqv x y) && (← eqv b x) then return ("idem", f)
+  -- 全域性: R x y ∨ R y x。引数の入替は可換と同形だが、枠が ∨ のときは
+  -- 演算の可換ではなく関係の全域性(線形性)としてチャージする。
+  if r == ``Or then
+    if let some (r1, x1, y1) := asBinApp a then
+      if let some (r2, x2, y2) := asBinApp b then
+        if r1 == r2 then
+          if (← eqv x1 y2) && (← eqv y1 x2) then return ("total", r1, Name.anonymous)
+
+  -- 二項演算の法則(可換・結合・冪等・吸収・分配)は、結論が等式・同値の
+  -- 形の場合に限る。外側の枠を制限しないと、全域性 `R a b ∨ R b a` のような
+  -- 主張まで「可換」と誤判定する(検証フィクスチャで実測)。
+  -- 判定は「誤って付けない」向きに倒す、という原則の適用である。
+  if r == ``Eq || r == ``Iff then
+    if let some (f, x, y) := asBinApp a then
+      if let some (g, u, v) := asBinApp b then
+        if f == g then
+          if (← eqv x v) && (← eqv y u) then return ("comm", f, Name.anonymous)
+          if let some (f', x', y') := asBinApp x then
+            if let some (g', u', v') := asBinApp v then
+              if f' == f && g' == f then
+                if (← eqv x' u) && (← eqv y' u') && (← eqv y v') then
+                  return ("assoc", f, Name.anonymous)
+        else
+          -- 分配律: f x (g p q) = g (f x p) (f x q)。担い手は対 (f, g)。
+          if let some (g', p, q) := asBinApp y then
+            if g' == g then
+              if let some (fl, xl, pl) := asBinApp u then
+                if let some (fr, xr, qr) := asBinApp v then
+                  if fl == f && fr == f then
+                    if (← eqv xl x) && (← eqv xr x) && (← eqv pl p) && (← eqv qr q) then
+                      return ("distrib", f, g)
+      -- 吸収律: f x (g x w) = x。担い手は対 (f, g)。
+      -- 二つの半束 (⊔, ⊓) を一つの束へ融合する、対をまたぐ法則。
+      if let some (g2, u2, _) := asBinApp y then
+        if g2 != f then
+          if (← eqv u2 x) && (← eqv b x) then return ("absorb", f, g2)
+      if (← eqv x y) && (← eqv b x) then return ("idem", f, Name.anonymous)
 
   if !rels.isEmpty then
     match a.getAppFn, b.getAppFn with
-    | .const f _, .const g _ => if f == g then return ("mono", f)
+    | .const f _, .const g _ => if f == g then return ("mono", f, Name.anonymous)
     | _, _ => pure ()
   return none
 
@@ -145,10 +177,13 @@ structure ArgClassification where
   head         : Name := Name.anonymous
   /-- 結論の各引数の頭部定数。述語の含意関係を二層目のグラフとして取り出す材料。 -/
   conclArgs    : Array Name := #[]
-  /-- 主張の形。refl / symm / trans / antisymm / mono、判定できなければ空。 -/
+  /-- 主張の形。refl / symm / trans / antisymm / total / comm / assoc / idem /
+      absorb / distrib / mono、判定できなければ空。 -/
   shape        : String := ""
   /-- その形が「どの関係・演算についてのものか」。法則の在庫表の行になる。 -/
   shapeRel     : Name := Name.anonymous
+  /-- 二演算法則(吸収・分配)の相方。単独法則では anonymous。 -/
+  shapeRel2    : Name := Name.anonymous
 
 /-- 結論の頭部が論理的な包み（`Eq` など）なら、その中身の頭部まで降りる。
     「この定理は何についての主張か」を一語で言うための鍵になる。 -/
@@ -201,10 +236,12 @@ def classifyArgs (e : Expr) : MetaM ArgClassification :=
       match a.getAppFn with
       | .const n _ => n
       | _          => Name.anonymous
-    let (shape, shapeRel) ← try relShape hyps body catch _ => pure ("", Name.anonymous)
+    let (shape, shapeRel, shapeRel2) ← try relShape hyps body
+      catch _ => pure ("", Name.anonymous, Name.anonymous)
     return {
       binders, numExplicit := nE, numImplicit := nI, numInst := nC, numHyp := nH,
-      conclusion := concl, subject := subjectOf body, head, conclArgs, shape, shapeRel
+      conclusion := concl, subject := subjectOf body, head, conclArgs,
+      shape, shapeRel, shapeRel2
     }
 
 /-! ## 直接依存する定数
@@ -374,10 +411,13 @@ structure DeclReport where
   subject     : Name
   /-- 結論の各引数の頭部定数。述語の含意関係を取り出す材料。 -/
   conclArgs   : Array Name
-  /-- 主張の形。refl / symm / trans / antisymm / mono。 -/
+  /-- 主張の形。refl / symm / trans / antisymm / total / comm / assoc / idem /
+      absorb / distrib / mono。 -/
   shape       : String
   /-- その形がどの関係・演算についてのものか。 -/
   shapeRel    : Name
+  /-- 二演算法則(吸収・分配)の相方。単独法則では anonymous。 -/
+  shapeRel2   : Name
   /-- `[reducible]` などの可簡約性。`abbrev` と `def` の区別がここに出る。 -/
   reducibility : String
   /-- 宣言が書かれている行。0 は不明。 -/
@@ -432,13 +472,16 @@ def buildReport (env : Environment) (ci : ConstantInfo)
     | none   => acc
   let line ← try declLine name catch _ => pure 0
   let isInst ← try Lean.Meta.isInstance name catch _ => pure false
+  -- `ReducibilityStatus` の構成子は版により増える(〜v4.28: 3 つ / v4.29 で
+  -- `implicitReducible` 追加(#12247)/ v4.33 で `instanceReducible` に分割
+  -- されて 5 つ(#13637))。構成子の全列挙は版を跨ぐと「不足」か「冗長」の
+  -- どちらかで壊れるため、構成子名を参照せず `Repr`(core が導出済み)で
+  -- 名前を写す。どの版でも情報を落とさない。
+  -- 例: "Lean.ReducibilityStatus.instanceReducible" → "instanceReducible"
   let red ← try
-      pure (match (← Lean.getReducibilityStatus name) with
-        | .reducible         => "reducible"
-        | .semireducible     => "semireducible"
-        | .irreducible       => "irreducible"
-        | .implicitReducible => "implicitReducible"
-        | .instanceReducible => "instanceReducible")
+      let st ← Lean.getReducibilityStatus name
+      let s := toString (repr st)
+      pure (((s.splitOn ".").getLast?).getD s)
     catch _ => pure ""
   let valSize := match ci.value? (allowOpaque := true) with
     | some v => exprSize v
@@ -474,6 +517,7 @@ def buildReport (env : Environment) (ci : ConstantInfo)
     conclArgs   := cls.conclArgs
     shape       := cls.shape
     shapeRel    := cls.shapeRel
+    shapeRel2   := cls.shapeRel2
     reducibility := red
     line
     numUniverse := ci.levelParams.length
@@ -504,6 +548,15 @@ def analyzeDeclSingle (ci : ConstantInfo) (valueChars : Nat := 0) : MetaM DeclRe
 深さ上限を設けて探索すると、BFS が打ち切られただけのノードが
 「依存先が閉集合の中にない」状態になり、極小元と区別できなくなる。
 これを混同すると最小の仮定を誤って報告するので 2 つに分ける。
+
+閉包作用素の言葉で言えば、↓ は宣言の冪集合上の閉包作用素
+（拡大・単調・冪等）であり、
+
+    frontier = ∅  ⟺  訪問集合が ↓ の不動点（＝依存で閉じた集合）
+
+が成り立つ。「正直なフロンティア」とは、閉包の不動点に達したかどうかの
+機械検査に他ならない。不動点の全体は完備束をなし、min(↓d) はその中の
+主不動点 ↓{d} の極小元である。
 
 深さ無制限の場合は ImportGraph の `Name.transitivelyUsedConstants` が
 閉集合そのものを返すので、そちらを使う（フロンティアは必ず空になる）。 -/

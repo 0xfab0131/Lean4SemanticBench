@@ -173,19 +173,27 @@
 
      取れていない欄は「まだ証明されていない」ことを意味するのであって、
      「成り立たない」ことではない。判定は取り逃す向きに倒してあるので、
-     欄が空でも別の形で証明されている可能性は残る。そこは表に明記する。 */
-  const LAWS = ["refl", "irrefl", "symm", "trans", "antisymm", "mono", "comm", "assoc", "idem"];
+     欄が空でも別の形で証明されている可能性は残る。そこは表に明記する。
+     同じ原則から、`sorry` を含む宣言は在庫に数えない。空欄は正直でも、
+     埋まった欄が sorry で嘘をつくことは許されない。 */
+  const LAWS = ["refl", "irrefl", "symm", "trans", "antisymm", "total", "mono",
+                "comm", "assoc", "idem", "absorb", "distrib"];
 
   function lawInventory() {
     indices();
     if (cache.laws) return cache.laws;
-    const rows = new Map();          // 関係名 → { law → [宣言名] }
+    const rows = new Map();          // 関係名 → { law → [宣言名], pairs }
     for (const [n, nd] of Object.entries(state.nodes)) {
       if (!nd.shape || !nd.shapeRel) continue;
+      if (nd.usesSorry) continue;    // sorry の主張を「証明済みの法則」として数えない
       const rel = nd.shapeRel;
-      if (!rows.has(rel)) rows.set(rel, { rel, total: 0, laws: {} });
+      if (!rows.has(rel)) rows.set(rel, { rel, total: 0, laws: {}, pairs: {} });
       const row = rows.get(rel);
       (row.laws[nd.shape] || (row.laws[nd.shape] = [])).push(n);
+      // 二演算法則(吸収・分配)は相方 shapeRel2 を対として控える
+      if ((nd.shape === "absorb" || nd.shape === "distrib") && nd.shapeRel2) {
+        (row.pairs[nd.shape] || (row.pairs[nd.shape] = new Set())).add(nd.shapeRel2);
+      }
       row.total++;
     }
     // 主題としての登場回数も添える。関係の「大きさ」の目安になる。
@@ -195,6 +203,40 @@
     }
     const list = [...rows.values()].map((r) => ({ ...r, weight: weight[r.rel] || 0 }));
     list.sort((a, b) => (b.total - a.total) || (b.weight - a.weight) || (a.rel < b.rel ? -1 : 1));
+
+    /* 判断（列の組から読める構造）。計算はここに一元化し、表示側
+       （panels / ldr_check）は結果を読むだけにする（重複実装は必ず乖離する）。
+
+         反射+推移               → 前順序
+           +反対称               → 半順序、さらに +全域 → 全順序
+         反射+対称+推移          → 同値
+         可換+結合+冪等          → 半束
+           相方も半束で吸収が双方向 → 束、さらに分配があれば → 分配束 */
+    const byRel = new Map(list.map((r) => [r.rel, r]));
+    const hasLaw = (row, l) => (row.laws[l] || []).length > 0;
+    const isSemi = (row) => hasLaw(row, "comm") && hasLaw(row, "assoc") && hasLaw(row, "idem");
+    for (const r of list) {
+      let verdict = null;
+      if (hasLaw(r, "refl") && hasLaw(r, "trans") && hasLaw(r, "symm")) {
+        verdict = { t: "同値", h: 152 };
+      } else if (hasLaw(r, "refl") && hasLaw(r, "trans") && hasLaw(r, "antisymm")) {
+        verdict = hasLaw(r, "total") ? { t: "全順序", h: 262 } : { t: "半順序", h: 243 };
+      } else if (hasLaw(r, "refl") && hasLaw(r, "trans")) {
+        verdict = { t: "前順序", h: 199 };
+      } else if (isSemi(r)) {
+        verdict = { t: "半束", h: 271 };
+        for (const g of r.pairs.absorb ? [...r.pairs.absorb] : []) {
+          const rg = byRel.get(g);
+          if (rg && isSemi(rg) && rg.pairs.absorb && rg.pairs.absorb.has(r.rel)) {
+            const dist = (r.pairs.distrib && r.pairs.distrib.has(g))
+                      || (rg.pairs.distrib && rg.pairs.distrib.has(r.rel));
+            verdict = dist ? { t: "分配束", h: 291 } : { t: "束", h: 281 };
+            break;
+          }
+        }
+      }
+      r.verdict = verdict;
+    }
     cache.laws = { list, LAWS };
     return cache.laws;
   }

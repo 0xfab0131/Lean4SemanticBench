@@ -48,12 +48,15 @@ elab "#minimal_deps " id:ident d:(num)? : command => do
 
 /-- 複数宣言をキャッシュ共有のまま処理する（`MetaM` 上の本体）。 -/
 def batchReports (env : Environment) (names : Array Name) : MetaM (Array DeclReport) := do
-  let (out, _) ← (do
+  -- 明示的な `CacheM` 注釈は Main.collectAllReports と同じ理由
+  -- (無名 do ブロックはモナド推論が elaborator の版に依存する)。
+  let collect : CacheM (Array DeclReport) := do
     let mut acc : Array DeclReport := #[]
     for n in names do
       if let some ci := env.find? n then
         try acc := acc.push (← analyzeDecl env ci) catch _ => pure ()
-    return acc).run ({} : Caches)
+    return acc
+  let (out, _) ← collect.run ({} : Caches)
   return out
 
 /-- `#decl_report_batch [foo, bar, baz]` : Markdown 表で一覧出力。 -/

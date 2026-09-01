@@ -304,11 +304,22 @@
     // データ読み込み
     $("btnData").addEventListener("click", async () => {
       $("dataStatus").textContent = "既定の監査結果を探しています…";
+      $("dataStatus").style.whiteSpace = "pre-line";
       $("dataDlg").showModal();
       const d = await getDefaultReport();
-      $("dataStatus").textContent = d
+      let status = d
         ? `既定の監査結果: ${(d.length / 1048576).toFixed(1)} MB / ${d.split("\n").filter(Boolean).length} 宣言`
         : "既定の監査結果は未生成です。Graph で `node make_default_report.js` を実行すると埋め込まれます。";
+      // 来歴(report.meta.json 由来)。何の・いつの・どの環境の解析かを常に同定できるようにする
+      const m = LDR.DEFAULT_META;
+      if (d && m && m.target) {
+        const rev = (m.target.gitRev || "").slice(0, 8);
+        status += `\n来歴: ${m.target.name || "?"}${rev ? " @ " + rev : ""}`
+          + ` · ${m.target.toolchain || "?"}`
+          + (m.modules ? ` · ${m.modules.join(" ")}` : "")
+          + (m.generatedAt ? ` · ${m.generatedAt}` : "");
+      }
+      $("dataStatus").textContent = status;
       $("dataDefault").disabled = !d;
       $("dataDefault").classList.toggle("opacity-40", !d);
     });

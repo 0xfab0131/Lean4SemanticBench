@@ -29,12 +29,24 @@ if (!fs.existsSync(src) || fs.statSync(src).size === 0) {
 const text = fs.readFileSync(src, "utf8");
 const lines = text.split("\n").filter((l) => l.trim()).length;
 
+/* 来歴サイドカー(report.meta.json)があれば一緒に埋め込む。
+   ビューアが「いつ・何の・どの環境の解析を見ているか」を示せるようにする。 */
+let metaJs = "";
+const metaPath = src.replace(/\.jsonl$/, ".meta.json");
+if (fs.existsSync(metaPath)) {
+  try {
+    const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    metaJs = "window.LDR.DEFAULT_META = " + JSON.stringify(meta) + ";\n";
+  } catch (e) { /* 来歴が読めなくてもレポートの埋め込みは続ける */ }
+}
+
 const body =
   "/* 自動生成。編集しない。\n" +
   `   生成元: ${path.basename(src)}  (${lines} 宣言)\n` +
   `   作り直す: node Graph/make_default_report.js */\n` +
   "window.LDR = window.LDR || {};\n" +
-  "window.LDR.DEFAULT_REPORT = " + JSON.stringify(text) + ";\n";
+  "window.LDR.DEFAULT_REPORT = " + JSON.stringify(text) + ";\n" +
+  metaJs;
 
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, body);

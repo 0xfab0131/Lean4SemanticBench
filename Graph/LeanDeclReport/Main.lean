@@ -80,6 +80,7 @@ def declReportToJsonLine (r : DeclReport) (scope : String := "target") : String 
     "\"conclArgs\":"   ++ jsonNameArray r.conclArgs,
     "\"shape\":"       ++ jsonStr r.shape,
     "\"shapeRel\":"    ++ jsonStr (toString r.shapeRel),
+    "\"shapeRel2\":"   ++ jsonStr (toString r.shapeRel2),
     "\"binders\":"     ++ jsonBinders r.binders,
     "\"conclusion\":"  ++ jsonStr r.conclusion,
     "\"typeString\":"  ++ jsonStr r.typeString,
@@ -102,7 +103,10 @@ def isTargetDecl (env : Environment) (targets : Array Name) (n : Name) : Bool :=
 
 def collectAllReports (env : Environment) (names : Array Name) (valueChars : Nat)
     : MetaM (Array DeclReport) := do
-  let (out, _) ← (do
+  -- 収集本体には明示的に `CacheM` を注釈する。無名 do ブロックのままだと
+  -- モナドの決定が elaborator の推論順序に依存し、版によっては
+  -- (v4.30 で実測)`for` の時点で未確定のまま失敗する。
+  let collect : CacheM (Array DeclReport) := do
     let mut acc : Array DeclReport := #[]
     for n in names do
       match env.find? n with
@@ -111,7 +115,8 @@ def collectAllReports (env : Environment) (names : Array Name) (valueChars : Nat
           acc := acc.push (← analyzeDecl env ci valueChars)
         catch _ => pure ()   -- 特殊な内部宣言などで失敗したらスキップ
       | none => pure ()
-    return acc).run ({} : Caches)
+    return acc
+  let (out, _) ← collect.run ({} : Caches)
   /- 出力の行順を「ソースに書かれた順」に揃える。名前順で出すと、読み手が
      ファイルを読み進める順序と一致せず、"実装順" を再現できない。 -/
   return out.qsort fun a b =>

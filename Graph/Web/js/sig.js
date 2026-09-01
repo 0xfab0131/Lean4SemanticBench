@@ -106,9 +106,12 @@
     symm:     { ja: "対称", note: "R a b から R b a" },
     trans:    { ja: "推移", note: "R a m と R m b から R a b" },
     antisymm: { ja: "反対称", note: "R a b と R b a から a = b" },
+    total:    { ja: "全域", note: "R a b ∨ R b a の形（線形性）" },
     comm:     { ja: "可換", note: "f a b = f b a の形" },
     assoc:    { ja: "結合", note: "f (f a b) c = f a (f b c) の形" },
     idem:     { ja: "冪等", note: "f a a = a の形" },
+    absorb:   { ja: "吸収", note: "f a (g a b) = a の形。二つの半束を束に結ぶ" },
+    distrib:  { ja: "分配", note: "f a (g b c) = g (f a b) (f a c) の形" },
     mono:     { ja: "単調", note: "関係の仮定から、同じ頭部の像について同じ関係" },
   };
 

@@ -78,38 +78,46 @@ manifest は公式の `lake update` に書かせ、その直後に**事後検証
 **検証済み**
 
 - 解析器のコードは Lean core + Std + ImportGraph の 3 API のみに依存(Mathlib への import ゼロ)
-- import-graph は toolchain と同名の公式タグを発行しており、タグの指すコミットの
-  lean-toolchain はタグ名と一致する(v4.33.0-rc1 / v4.30.0 で実確認)
+- import-graph は vX.Y.0 と rc の公式タグを発行し、タグの指すコミットの
+  lean-toolchain はタグ名と一致する(v4.33.0-rc1 / v4.30.0 で実確認)。
+  **パッチ版(v4.32.1 / v4.33.1 等)のタグは発行されない**(2026-09 実確認)ため、
+  タグ解決は「完全一致 → rc 落とし → パッチ落とし(vX.Y.Z → vX.Y.0)」の
+  退避を実装している(パッチ版 toolchain とはソース互換)
 - Lake の TOML 設定は `packagesDir`・パス `[[require]]` を公式サポート。
   TOML は v4.8.0 導入の**後発の既定形式**であり、宣言的設定の公式推奨
   (lean4#4106)。探索順は **lakefile.lean 優先、無ければ lakefile.toml**
   (内省 target_info.js もこの順に合わせてある)
-- **v4.33.0-rc1 で mathlib 非依存(importGraph のみ)のビルドに成功**
-  (ライブラリと `decl_report` 実行ファイルの双方。Graph/ での実測)
-- 公式タグ `v4.33.0-rc1` の解決 rev は、旧構成(mathlib 経由の継承)が
-  使っていた rev と完全一致(タグ固定が従来の実体を正確に再現する)
-- 依存の manifest ロック継承は Graph/ の `lake update` で一点実確認
-  (importGraph の manifest から Cli が `inherited: true` で同一 rev に固定された)
+- **互換窓の両端で実測済み**:
+  - **v4.33.1**(現行最新安定版): 開発ワークスペース(Graph/)でライブラリ・
+    実行ファイル・対話コマンドの全ビルド成功
+  - **v4.30.0**: 衛星での e2e 完走(init → 対象ビルド → 解析器ビルド →
+    decl_report 実行 → report.jsonl + meta 生成 → ビューア埋め込み)
+- **TOML の `supportInterpreter` は v4.30.0 の衛星で実働を確認**
+  (decl_report が `withImportModules` で環境を読み JSONL を生成した。
+  反証条項〔無効なら lakefile.lean 生成へ切替〕は発動しなかった)
+- 公式タグの解決 rev は旧構成(mathlib 経由の継承)の rev と一致/
+  依存 manifest のロック継承(Cli の `inherited: true`)を実確認
 
 **仮説(破れても検出されて停止する。「黙って間違う」ことはない)**
 
 - 衛星での `lake update` が、対象(パス依存)の manifest ロックを継承し、
   共有 packagesDir のリビジョンを動かさないこと。根拠は Lake 解決器
-  `addDependencyEntries` の読解と上記の一点実測、および lean4#13084
+  `addDependencyEntries` の読解と上記の実測、および lean4#13084
   (`lake update` は推移依存のピンを再解決しない)— この「再解決しない」性質は
   我々の構成では望む方向に働く。破れは事後検証(rev 完全一致)が検出する
-- 生成 TOML の `supportInterpreter` が対象 toolchain で有効なこと。
-  実プロジェクトでの使用実績はあるが、TOML の**未知キーは黙って無視される**ため、
-  最終確証は e2e(decl_report の実行成功)で得る。無効なら初回実行で必ず停止する
-  (**反証条項**: その場合は衛星の生成を、厳密なエスケープ付きの lakefile.lean へ
-  切り替える。`lake translate-config` があるため切替コストは小さい)
+
+**意味論上の下限**
+
+- **対応下限は v4.23.0 とする。** それ未満の toolchain では `Lean.collectAxioms` が
+  「公理の型が参照する公理」(`native_decide` 由来の `Lean.trustCompiler` 等)を
+  取り逃す既知バグがあり(lean4#8840、v4.23.0 の #8842 で修正)、
+  **公理監査が静かに不完全になる**。本ツールの中核は公理の正直な報告なので、
+  コンパイルの可否に関わらずこの版を下限とする
 
 **未確定(利用の中で実測する)**
 
-- 解析器ソースがコンパイルできる toolchain の範囲(互換窓)。
-  v4.33.0-rc1 は実測済み。対応外の場合は `report` の解析器ビルドで停止する。
-  なお TOML 衛星の下限は v4.8.0(TOML 導入)だが、解析器自身の要求
-  (`Name.isInternalDetail` = v4.10 等)の方が高いため実質の制約にならない
+- v4.23.0〜v4.29 の範囲でのコンパイル可否(未実測)。
+  対応外の場合は `report` の解析器ビルドで停止する
 
 ## 制限と注意
 
@@ -132,6 +140,11 @@ manifest は公式の `lake update` に書かせ、その直後に**事後検証
 - **信頼境界**: `lake update` / `lake build` は対象の lakefile を実行する
   (lakefile.lean は Lean プログラム)。解析は対象のビルドを伴うため、
   **信頼できる対象にのみ**使用すること。
+- **モジュールシステム化された対象**(v4.20 以降の `module` ヘッダ採用、
+  v4.27 で安定化)では、定理の証明項が import から省略されるため、
+  import 越しの宣言の**値依存・証明項サイズが欠け得る**
+  (公理は core の exported 公理表で保たれる)。`import all` 相当での
+  完全な値解析への対応は今後の課題(未実測)。
 
 ## ファイル構成
 

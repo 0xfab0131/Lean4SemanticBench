@@ -18,19 +18,20 @@ open Lake DSL
       Lean.Environment.getModuleFor?         宣言 → 定義モジュール
       Lean.Name.transitivelyRequiredModules  推移的に必要なモジュール
       Lean.Environment.findRedundantImports  冗長な import の検出
-    の三つ。リビジョンは lean-toolchain と**同名の公式タグ**で固定する
-    (import-graph は toolchain ごとに同名タグを発行しており、タグの指す
-    コミットの lean-toolchain はタグ名と一致する)。
+    の三つ。リビジョンは toolchain に対応する**公式タグ**で固定する。
+    import-graph は vX.Y.0 と rc のタグを発行し、パッチ版(v4.33.1 等)の
+    タグは発行しない(2026-09 実確認)。パッチ版 toolchain とはソース互換
+    なので、toolchain vX.Y.Z に対してはタグ vX.Y.0 を用いる。
 
-  [規約] lean-toolchain を更新するときは、下の importGraph のタグも同じ版名に
-    揃えること。lake-manifest.json は `lake update` が生成するロックであり、
-    手で編集しない(意図はこのファイル、記録は manifest、という分離を守る)。
+  [規約] lean-toolchain を更新するときは、下の importGraph のタグも対応する
+    版名(vX.Y.0)に揃えること。lake-manifest.json は `lake update` が生成する
+    ロックであり、手で編集しない(意図はこのファイル、記録は manifest)。
 -/
 
 package «lean-decl-report» where
 
 require importGraph from git
-  "https://github.com/leanprover-community/import-graph" @ "v4.33.0-rc1"
+  "https://github.com/leanprover-community/import-graph" @ "v4.33.0"
 
 @[default_target]
 lean_lib «LeanDeclReport» where

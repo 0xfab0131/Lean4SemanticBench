@@ -239,10 +239,13 @@
      読み手が三つを区別できない。Lean 側が分解した `binders`（`prop` 旗つき）と
      `conclusion` を使って、役割ごとに置き直す。 */
 
-  /** Mathlib / Lean core 由来か。公式ドキュメントの検索が意味を持つのはこの場合だけ。 */
-  const EXTERNAL_ROOT = /^(Mathlib|Init|Std|Lean|Batteries|Aesop|Qq|Plausible|LeanSearchClient|ProofWidgets)(\.|$)/;
-  const isExternalDecl = (nd, name) =>
-    !!nd && (nd.external || EXTERNAL_ROOT.test(String(nd.module || "")) || EXTERNAL_ROOT.test(String(name || "")));
+  /* mathlib4_docs が実際にホストしている root の一覧。これは「データから推定する」
+     類のものではなく、ドキュメントサイトの提供範囲という外部事実の定義なので、
+     一覧で持つのが正しい。以前は `external` 旗でも代用していたが、それだと
+     mathlib 系でない依存(自作の別パッケージ等)にも docs リンクが出てしまう。 */
+  const DOCS_ROOT = /^(Mathlib|Init|Std|Lean|Batteries|Aesop|Qq|Plausible|LeanSearchClient|ProofWidgets)(\.|$)/;
+  const hasOfficialDocs = (nd, name) =>
+    DOCS_ROOT.test(String((nd && nd.module) || "")) || DOCS_ROOT.test(String(name || ""));
 
   const KIND_BADGE = { explicit: "明示", implicit: "暗黙", strictImplicit: "暗黙", inst: "inst" };
 
@@ -334,7 +337,7 @@
       }).join(" ") || `<span class="text-[11px] text-emerald-600 dark:text-emerald-400">なし（公理非依存）</span>`;
 
       const isCenter = name === dv.center;
-      const ext = isExternalDecl(nd, name);
+      const ext = hasOfficialDocs(nd, name);
       const q = encodeURIComponent(name);
       const leaf = encodeURIComponent(String(name).split(".").slice(-1)[0]);
       /* 公式ドキュメントは Mathlib / Lean core の宣言にしか無いので、そのときだけ出す。
@@ -578,11 +581,13 @@
      これがこの表の本当の目的で、一覧を眺めるだけで構造が分かる。 */
   const LAW_JA = {
     refl: "反射", irrefl: "非反射", symm: "対称", trans: "推移", antisymm: "反対称",
-    mono: "単調", comm: "可換", assoc: "結合", idem: "冪等",
+    total: "全域", mono: "単調", comm: "可換", assoc: "結合", idem: "冪等",
+    absorb: "吸収", distrib: "分配",
   };
   const LAW_HUE = {
     refl: 200, irrefl: 210, symm: 265, trans: 155, antisymm: 25,
-    mono: 235, comm: 320, assoc: 300, idem: 95,
+    total: 262, mono: 235, comm: 320, assoc: 300, idem: 95,
+    absorb: 281, distrib: 291,
   };
 
   function renderLaws(st) {
@@ -604,15 +609,10 @@
     </div>`;
 
     const rows = inv.list.map((r) => {
-      const has = (l) => (r.laws[l] || []).length;
       /* 配色は動的なクラス名ではなく実値で持つ。CDN 版 Tailwind は DOM を
-         監視して生成するが、組み立てたクラス名は取りこぼし得るので値で書く。 */
-      const verdict =
-        has("refl") && has("trans") && has("symm") ? { t: "同値", h: 152 }
-        : has("refl") && has("trans") && has("antisymm") ? { t: "半順序", h: 243 }
-        : has("refl") && has("trans") ? { t: "前順序", h: 199 }
-        : has("comm") && has("assoc") && has("idem") ? { t: "半束", h: 271 }
-        : null;
+         監視して生成するが、組み立てたクラス名は取りこぼし得るので値で書く。
+         判断そのものは store.lawInventory が一元的に計算する（重複実装は乖離する）。 */
+      const verdict = r.verdict;
       const cells = laws.map((l) => {
         const list = r.laws[l] || [];
         if (!list.length) {
@@ -645,6 +645,8 @@
         空欄は「まだ証明されていない」であって「成り立たない」ではありません。
         判定は仮定と結論の構文的な形から行い、誤って付けない向きに倒してあるので、
         別の言い回しで証明されているものは取り逃します。
+        同じ理由から <code>sorry</code> を含む宣言は数えません
+        （埋まった欄が嘘をつかないため）。
       </p>`;
   }
 

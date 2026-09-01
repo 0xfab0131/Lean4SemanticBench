@@ -164,6 +164,20 @@ write_stamp() {  # $1 = sat, $2 = cfg, $3 = src, $4 = ig_rev
   printf '%s\n%s\n%s\n' "$2" "$3" "$4" > "$1/.l4sb-stamp"
 }
 
+# importGraph 公式タグの自動解決に失敗したときの退避候補(元の rev は含まない)。
+#   1. -rcN を落とす(rc タグ未発行の期間がある)
+#   2. パッチを落とす vX.Y.Z → vX.Y.0
+#      import-graph はパッチ版タグを発行しない(v4.32.1 / v4.33.1 等の不在を
+#      2026-09 に実確認)。パッチ版 toolchain とはソース互換なので vX.Y.0 で代替する。
+ig_fallback_tags() {  # $1 = 失敗した rev
+  local base="${1%%-rc*}"
+  if [ "$base" != "$1" ]; then echo "$base"; fi
+  if [[ "$base" =~ ^v([0-9]+)\.([0-9]+)\.([1-9][0-9]*)$ ]]; then
+    echo "v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.0"
+  fi
+  true
+}
+
 # ---------- init ----------
 cmd_init() {
   local target="" force=0 igrev=""
@@ -234,23 +248,27 @@ cmd_init() {
   # 衛星の依存は全てピン留めされているので、これは冪等のはずである —— が、
   # その仮定に依存せず、直後の事後検証で必ず確かめる。
   info "依存を解決します (lake update)"
-  if ! ( cd "$sat" && lake update ) >&2; then
-    if [ "$L4SB_HAS_IMPORTGRAPH" != "1" ] && [ -z "$igrev" ] && [[ "$ig_rev" == *-rc* ]]; then
-      # rc タグが未発行の場合の退避: -rcN を落として安定版タグを試す。
-      # lakefile は sed で書き換えず再生成し、stamp も採用 rev で書き直す
-      # (指紋と実内容の乖離を作らない)。
-      local ig_rev2="${ig_rev%%-rc*}"
-      info "importGraph のタグ $ig_rev の解決に失敗。$ig_rev2 で再試行します"
-      write_satellite_lakefile "$sat" "$ig_rev2"
-      ( cd "$sat" && lake update ) >&2 \
-        || die "依存の解決に失敗しました。--import-graph-rev で明示指定できます"
-      ig_rev="$ig_rev2"
-      want_cfg="$(config_fingerprint "$ig_rev")"
-      write_stamp "$sat" "$want_cfg" "$want_src" "$ig_rev"
-    else
-      die "依存の解決に失敗しました (lake update)"
-    fi
+  local resolved=0
+  if ( cd "$sat" && lake update ) >&2; then
+    resolved=1
+  elif [ "$L4SB_HAS_IMPORTGRAPH" != "1" ] && [ -z "$igrev" ]; then
+    # 公式タグの自動解決の退避(rc 落とし → パッチ落とし)。
+    # lakefile は sed で書き換えず再生成し、成功したら stamp も採用 rev で
+    # 書き直す(指紋と実内容の乖離を作らない)。
+    local cand
+    for cand in $(ig_fallback_tags "$ig_rev"); do
+      info "importGraph のタグ $ig_rev の解決に失敗。$cand で再試行します"
+      write_satellite_lakefile "$sat" "$cand"
+      if ( cd "$sat" && lake update ) >&2; then
+        ig_rev="$cand"
+        want_cfg="$(config_fingerprint "$ig_rev")"
+        write_stamp "$sat" "$want_cfg" "$want_src" "$ig_rev"
+        resolved=1
+        break
+      fi
+    done
   fi
+  [ "$resolved" -eq 1 ] || die "依存の解決に失敗しました (lake update)。--import-graph-rev で明示指定できます"
 
   verify_identity "$target" "$sat"
   info "衛星ワークスペースを生成しました: $sat"

@@ -51,6 +51,10 @@ const ok = (cond, label, extra) => {
   if (!cond) fail++;
   console.log(`${cond ? "  ok  " : " FAIL "} ${label}${extra !== undefined ? "  → " + extra : ""}`);
 };
+/* ツールの不変条件(どんなデータでも成り立つべき)と、データの特性
+   (十分な規模・内容が要る)を混同しない。前提を満たさないデータでは
+   FAIL ではなく skip として報告する。 */
+const skip = (label, why) => console.log(`  skip  ${label}  → ${why}`);
 
 /* ============================================================
    宣言の検査モード
@@ -293,7 +297,13 @@ console.log(`  |↓d| は厳密に数えた: ${met.exact ? "はい（ビット�
     console.log(`    ${S.METRICS[key].ja.padEnd(14)} 破れ ${String(v).padStart(6)} 本 (${pct}%)${mono ? "  ← 線形拡大" : ""}`);
     if (mono) ok(v === 0, `${S.METRICS[key].ja} は依存順序と両立する`, `破れ ${v}`);
   }
-  ok(violations.direct > 0, "直接依存数は依存順序と両立しない（従来の並び順の欠陥）", `破れ ${violations.direct} 本`);
+  // 負の対照実験: 十分な辺があれば破れが必ず観測されるはず。
+  // 小規模データでは破れ自体が作れないので判定しない。
+  if (edges >= 30) {
+    ok(violations.direct > 0, "直接依存数は依存順序と両立しない（従来の並び順の欠陥）", `破れ ${violations.direct} 本`);
+  } else {
+    skip("直接依存数は依存順序と両立しない（負の対照）", `辺 ${edges} 本の小規模データでは判定不能`);
+  }
 }
 
 console.log("\n=== Lean 側から来た構造化データ ===");
@@ -326,7 +336,8 @@ console.log("\n=== 法則の在庫 ===");
 {
   const inv = S.lawInventory();
   const JA = { refl: "反射", irrefl: "非反射", symm: "対称", trans: "推移", antisymm: "反対称",
-               mono: "単調", comm: "可換", assoc: "結合", idem: "冪等" };
+               total: "全域", mono: "単調", comm: "可換", assoc: "結合", idem: "冪等",
+               absorb: "吸収", distrib: "分配" };
   const cols = inv.LAWS;
   const head = "  " + "関係".padEnd(46) + cols.map((c) => JA[c].padStart(5)).join("") + "   判断";
   console.log(head);
@@ -334,16 +345,18 @@ console.log("\n=== 法則の在庫 ===");
   let verdicts = 0;
   for (const r of inv.list) {
     const has = (l) => (r.laws[l] || []).length;
-    const v = has("refl") && has("trans") && has("symm") ? "同値"
-            : has("refl") && has("trans") && has("antisymm") ? "半順序"
-            : has("refl") && has("trans") ? "前順序"
-            : has("comm") && has("assoc") && has("idem") ? "半束" : "";
+    // 判断は store.lawInventory が一元的に計算したものを読む(重複実装は乖離する)
+    const v = r.verdict ? r.verdict.t : "";
     if (v) verdicts++;
     const cells = cols.map((c) => (has(c) ? String(has(c)) : "·").padStart(5)).join("");
     console.log("  " + short(r.rel).padEnd(46) + cells + "   " + v);
   }
   console.log(`\n  ${inv.list.length} 個の関係・演算 / 法則 ${inv.list.reduce((a, r) => a + r.total, 0)} 件 / 構造が読めたもの ${verdicts} 件`);
-  ok(inv.list.length > 0, "法則の在庫を集計できた");
+  // shape 付きの宣言が一つも無いデータ(法則の形の定理を含まない対象)では
+  // 在庫が空になるのが正しい。集計機構の検査は shape があるときだけ意味を持つ。
+  const anyShape = Object.values(S.state.nodes).some((n) => n.shape);
+  if (anyShape) ok(inv.list.length > 0, "法則の在庫を集計できた");
+  else skip("法則の在庫を集計できた", "shape 付き宣言が無いデータ(判定対象なし)");
   const bad = inv.list.filter((r) => !r.rel || r.rel === "[anonymous]").length;
   ok(bad === 0, "全ての行に関係名が付いている", `名前なし ${bad} 件`);
 }
@@ -370,31 +383,51 @@ console.log("\n=== 球面モード（部分グラフごとの扇）===");
     console.log(`    ${String(s.index + 1).padStart(2)}/${s.of}  `
       + short(s.key).padEnd(34) + ` 重さ ${String(s.weight).padStart(4)}  ${per}`);
   }
-  ok(d.sectors.length > 0, "区画に分割できた");
-  ok(d.sectors.length <= 11, "区画が増えすぎない（小さい群は「その他」に束ねる）", d.sectors.length);
-  ok(avg3 >= flatAvg, "一区画あたりの表示幅が平面モード以上になっている");
-  ok(d.sectors.every((s) => s.parts.length > 0), "空の区画が無い");
-  // 経度は等分。回す角度が均等でないと、狙った区画に止められない。
-  const spans = [...new Set(d.sectors.map((s) => s.span.toFixed(9)))];
-  ok(spans.length === 1, "経度が等分になっている", spans.join(" / "));
-  const lonSum = d.sectors.reduce((a, s) => a + s.span, 0);
-  ok(Math.abs(lonSum - 2 * Math.PI) < 1e-9, "経度の総和が 2π ちょうど", lonSum.toFixed(6));
-  // 薄い錐は分割せず常に出す。片側が空になる区画を作らない。
-  ok(pinnedCount > 0 || d.sectors.every((s) => s.parts.length),
-     "薄い側の錐は固定表示になっている", `固定 ${pinnedCount} 件`);
-  ok(d.sectors.every((s) => s.coneId === d.rotatingCone), "区画は回す側の錐だけから作られている");
-  // 送りが一周して戻ること
-  const i0 = S.frontSectorIndex();
-  for (let i = 0; i < d.sectors.length; i++) S.actions.spinStep(1);
-  ok(S.frontSectorIndex() === i0, "一周すると元の区画に戻る", `${i0} → ${S.frontSectorIndex()}`);
-  let cross = 0;
-  for (const s of d.sectors) {
-    for (const pt of s.parts) {
-      const own = new Set(Object.keys(pt.pos));
-      for (const e of pt.edges) if (e.u !== d.center && (!own.has(e.u) || !own.has(e.v))) cross++;
+  if (d.sectors.length === 0) {
+    // 分割する規模が無い(全ての錐が PIN_MAX 以下)ときは、
+    // 「回す錐なし・全ノードが固定表示」が仕様上の正しい挙動。
+    ok(d.rotatingCone === null, "小規模データでは回す錐が無い（固定表示のみ）");
+    ok(pinnedCount > 0, "全ノードが固定側に表示されている", `固定 ${pinnedCount} 件`);
+    skip("区画分割の幾何（等分・総和 2π・跨ぎ辺なし 等）", "分割が発生しない規模のデータ");
+  } else {
+    ok(d.sectors.length <= 11, "区画が増えすぎない（小さい群は「その他」に束ねる）", d.sectors.length);
+    ok(avg3 >= flatAvg, "一区画あたりの表示幅が平面モード以上になっている");
+    ok(d.sectors.every((s) => s.parts.length > 0), "空の区画が無い");
+    // 経度は等分。回す角度が均等でないと、狙った区画に止められない。
+    const spans = [...new Set(d.sectors.map((s) => s.span.toFixed(9)))];
+    ok(spans.length === 1, "経度が等分になっている", spans.join(" / "));
+    const lonSum = d.sectors.reduce((a, s) => a + s.span, 0);
+    ok(Math.abs(lonSum - 2 * Math.PI) < 1e-9, "経度の総和が 2π ちょうど", lonSum.toFixed(6));
+    // 薄い錐は分割せず常に出す。片側が空になる区画を作らない。
+    ok(pinnedCount > 0 || d.sectors.every((s) => s.parts.length),
+       "薄い側の錐は固定表示になっている", `固定 ${pinnedCount} 件`);
+    ok(d.sectors.every((s) => s.coneId === d.rotatingCone), "区画は回す側の錐だけから作られている");
+    // 送りが一周して戻ること
+    const i0 = S.frontSectorIndex();
+    for (let i = 0; i < d.sectors.length; i++) S.actions.spinStep(1);
+    ok(S.frontSectorIndex() === i0, "一周すると元の区画に戻る", `${i0} → ${S.frontSectorIndex()}`);
+    let cross = 0;
+    for (const s of d.sectors) {
+      for (const pt of s.parts) {
+        const own = new Set(Object.keys(pt.pos));
+        for (const e of pt.edges) if (e.u !== d.center && (!own.has(e.u) || !own.has(e.v))) cross++;
+      }
     }
+    ok(cross === 0, "区画をまたぐ辺が無い", cross);
+    /* clopen 欠損: 区画が「外と依存し合わない部分理論」(↓ と ↑ の両方で閉じた
+       clopen 集合)からどれだけ離れているか。表示は跨ぎ辺を張らないが、
+       分割の真の商品質は元グラフでの区画間依存辺(境界辺)の本数で測れる。
+       0 なら各区画は clopen(=連結成分の和)。情報のみで合否は付けない。 */
+    const sectorOf = {};
+    for (const s of d.sectors)
+      for (const pt of s.parts)
+        for (const n2 of Object.keys(pt.pos)) sectorOf[n2] = s.id;
+    let clopenDefect = 0;
+    for (const u of Object.keys(sectorOf))
+      for (const v2 of idx.dep[u] || [])
+        if (sectorOf[v2] && sectorOf[v2] !== sectorOf[u]) clopenDefect++;
+    console.log(`  clopen 欠損（区画間の依存辺） ${clopenDefect} 本`);
   }
-  ok(cross === 0, "区画をまたぐ辺が無い", cross);
   S.actions.toggleView3d();
   S.actions.setBaseDepth(1);
 }
@@ -431,15 +464,24 @@ S.actions.clearHist();
 for (const n of names.slice(0, 8)) S.actions.navigate(n);
 S.actions.back(); S.actions.back();
 ok(S.state.hist.order.length > 0, "履歴が記録される", S.state.hist.order.length);
-const before = S.state.hist.order.length;
-S.actions.navigate(names[names.length - 1]);
-ok(S.state.hist.order.length === before + 1, "戻った先から分岐しても既存の枝が消えない");
+// 分岐と系譜の検査には移動先が 2 件以上要る(宣言 1 件のデータでは作れない)
+if (names.length >= 2) {
+  const before = S.state.hist.order.length;
+  S.actions.navigate(names[names.length - 1]);
+  ok(S.state.hist.order.length === before + 1, "戻った先から分岐しても既存の枝が消えない");
+} else {
+  skip("戻った先から分岐しても既存の枝が消えない", "宣言 1 件のデータでは分岐を作れない");
+}
 for (let i = 0; i < 120; i++) S.actions.navigate(names[i % names.length]);
 ok(S.state.hist.order.length <= 50, "履歴が 50 件で頭打ち", S.state.hist.order.length);
 ok(!!S.histCur(), "頭打ち後も現在地が残る", S.histCur() && short(S.histCur().name));
-let depth = 0;
-for (let p = S.state.hist.curId; p; p = S.state.hist.nodes[p].parent) depth++;
-ok(depth > 1, "現在地の系譜が残っている", `深さ ${depth}`);
+if (names.length >= 2) {
+  let depth = 0;
+  for (let p = S.state.hist.curId; p; p = S.state.hist.nodes[p].parent) depth++;
+  ok(depth > 1, "現在地の系譜が残っている", `深さ ${depth}`);
+} else {
+  skip("現在地の系譜が残っている", "宣言 1 件のデータでは系譜が長さ 1 になる");
+}
 
 console.log("\n=== ピン留め ===");
 S.actions.setRefFilter("value");
