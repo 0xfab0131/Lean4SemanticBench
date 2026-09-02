@@ -168,11 +168,17 @@
       const k = st.view.k == null ? fitK : st.view.k;
 
       /* 目標位置へ極座標のまま補間する。x,y で補間すると、角度が変わったとき
-         ノードが中心を横切って直線的に飛び、どの扇から来たのか分からなくなる。 */
+         ノードが中心を横切って直線的に飛び、どの扇から来たのか分からなくなる。
+         残差 animDelta は「もう動いていないか」の判定に使う(静止時は描画を止める)。 */
+      let animDelta = 0;
       const live = {};
       for (const [n, t] of Object.entries(dv.posAll)) {
         let a = anim[n];
         if (!a) a = anim[n] = { r: t.r * 0.6, th: t.th, o: 0 };
+        animDelta = Math.max(animDelta,
+          Math.abs(t.r - a.r),
+          Math.abs(t.th - a.th) * (a.r + 60),
+          60 * (1 - a.o));
         a.r += (t.r - a.r) * 0.24;
         a.th = lerpAngle(a.th, t.th, 0.24);
         a.o += (1 - a.o) * 0.2;
@@ -193,6 +199,7 @@
         drawLegend(pp, c, dv, W, H);
         drawGlobe(pp, c, dv, st, W, H);
         drawHoverCard(pp, c, dv, st, W, H);
+        maybeSleep(animDelta);
         return;
       }
 
@@ -268,6 +275,38 @@
 
         const thA = e.u === cen ? B.th : A.th;
         const rA = e.u === cen ? NH * 1.05 : A.r + NH / 2;
+
+        /* 非外向きの辺(巡回フォールバック等で ℓ が増えない)。半径クランプの
+           ベジエで描くと終点が実位置から遊離し、矢じりが空中を指す(監査で発見)。
+           実座標間の直線で正直に描き、矢じりも実方向へ向ける。 */
+        if (B.r - NH / 2 < rA + 6) {
+          const ax = e.u === cen ? 0 : A.x, ay = e.u === cen ? 0 : A.y;
+          const dx = B.x - ax, dy = B.y - ay, L = Math.hypot(dx, dy) || 1;
+          const t0 = Math.min(0.45, (NH / 2 + 4) / L);
+          const t1 = Math.max(t0 + 0.1, 1 - (NH / 2 + 4) / L);
+          pp.noFill();
+          pp.stroke(trace ? c.trace : edgeCol(style));
+          pp.strokeWeight((hot || trace ? 2.3 : 1.25) / k);
+          pp.drawingContext.globalAlpha = dim ? c.dim : (hot || trace ? 1 : 0.5);
+          if (style.dash) pp.drawingContext.setLineDash(style.dash.map((v2) => v2 / k));
+          pp.line(ax + dx * t0, ay + dy * t0, ax + dx * t1, ay + dy * t1);
+          pp.drawingContext.setLineDash([]);
+          const ang = Math.atan2(dy, dx);
+          pp.push(); pp.translate(ax + dx * t1, ay + dy * t1); pp.rotate(ang - Math.PI / 2);
+          if (style.head === "solid") {
+            pp.noStroke(); pp.fill(trace ? c.trace : edgeCol(style));
+            pp.triangle(0, 1.5 / k, -3.6 / k, -6.2 / k, 3.6 / k, -6.2 / k);
+          } else {
+            pp.noFill(); pp.stroke(trace ? c.trace : edgeCol(style));
+            pp.strokeWeight(1.9 / k);
+            pp.line(-3.8 / k, -6.6 / k, 0, 0.6 / k);
+            pp.line(3.8 / k, -6.6 / k, 0, 0.6 / k);
+          }
+          pp.pop();
+          pp.drawingContext.globalAlpha = 1;
+          continue;
+        }
+
         const rB = Math.max(B.r - NH / 2, rA + 6);
         const rM = (rA + rB) / 2;
 
@@ -365,7 +404,17 @@
 
       drawLegend(pp, c, dv, W, H);
       drawHoverCard(pp, c, dv, st, W, H);
+      maybeSleep(animDelta);
     };
+
+    /* 静止したら描画ループを止める。常時 60fps の再描画は、静止した図に対して
+       純粋な CPU/バッテリーの浪費になる。入力(マウス)と状態変化(subscribe)で
+       再開するので、見た目の応答は変わらない。 */
+    function maybeSleep(animDelta) {
+      const st = S.state;
+      const spinning = st.view3d && Math.abs(wrapPi(st.phi - phiAnim)) > 0.002;
+      if (animDelta < 0.5 && !spinning && !drag && !globeDrag) pp.noLoop();
+    }
 
     /* ホバーした宣言の中身を、その場で読めるようにする。
        密な層ではノードが細くなって名前が入りきらない。押さないと分からない、
@@ -517,17 +566,26 @@
             const hot = (hov && (e.u === hov || e.v === hov)) || onPath;
             const thA = e.u === cen ? B.th : A.th;
             const rA = e.u === cen ? NH * 1.05 : A.r + NH / 2;
-            const rB = Math.max(B.r - NH / 2, rA + 6);
-            const rM = (rA + rB) / 2;
-            const P0 = polar(rA, thA), P3 = polar(rB, B.th);
-            const C1 = polar(rM, thA), C2 = polar(rM, B.th);
             pp.noFill();
             pp.stroke(trace ? c.trace : edgeCol(style));
             pp.strokeWeight(((hot || trace) ? 2.2 : front ? 1.25 : 1) / (k * sc));
             pp.drawingContext.globalAlpha = dim ? alpha * c.dim
               : alpha * ((hot || trace) ? 0.95 : front ? 0.5 : 0.3);
             if (style.dash) pp.drawingContext.setLineDash(style.dash.map((v) => v / (k * sc)));
-            pp.bezier(P0.x, P0.y, C1.x, C1.y, C2.x, C2.y, P3.x, P3.y);
+            if (B.r - NH / 2 < rA + 6) {
+              // 非外向きの辺は実座標間の直線で(平面モードと同じ理由)
+              const A2 = e.u === cen ? { x: 0, y: 0 } : A;
+              const dx = B.x - A2.x, dy = B.y - A2.y, L = Math.hypot(dx, dy) || 1;
+              const t0 = Math.min(0.45, (NH / 2 + 4) / L);
+              const t1 = Math.max(t0 + 0.1, 1 - (NH / 2 + 4) / L);
+              pp.line(A2.x + dx * t0, A2.y + dy * t0, A2.x + dx * t1, A2.y + dy * t1);
+            } else {
+              const rB = Math.max(B.r - NH / 2, rA + 6);
+              const rM = (rA + rB) / 2;
+              const P0 = polar(rA, thA), P3 = polar(rB, B.th);
+              const C1 = polar(rM, thA), C2 = polar(rM, B.th);
+              pp.bezier(P0.x, P0.y, C1.x, C1.y, C2.x, C2.y, P3.x, P3.y);
+            }
             pp.drawingContext.setLineDash([]);
           }
 
@@ -784,6 +842,7 @@
     }
 
     pp.mouseMoved = function () {
+      pp.loop();          // 眠っていたら起こす(ホバーカードの追従にも必要)
       const st = S.state;
       const w = worldOf(pp.mouseX, pp.mouseY, st, pp.width, pp.height);
       const h = pick(w.x, w.y, pp.mouseX, pp.mouseY);
@@ -793,7 +852,14 @@
     };
 
     pp.mousePressed = function () {
-      if (pp.mouseButton !== pp.LEFT) return;      // 副ボタンは履歴移動に使う
+      pp.loop();
+      /* 副ボタンは履歴移動に使うので、左ボタンのみ扱う。
+         p5 1.x の mouseButton は "left" 等の文字列、2.x は {left,right,center} の
+         オブジェクト(破壊的変更)。旧比較は 2.x で常に偽になり、ドラッグと
+         クリックが全滅する(実障害として発生)。両版対応で判定する。 */
+      const mb = pp.mouseButton;
+      const isLeft = (mb !== null && typeof mb === "object") ? !!mb.left : mb === pp.LEFT;
+      if (!isLeft) return;
       if (pp.mouseX < 0 || pp.mouseY < 0 || pp.mouseX > pp.width || pp.mouseY > pp.height) return;
       if (S.state.view3d && inGlobe(pp.mouseX, pp.mouseY)) {
         globeDrag = { x: pp.mouseX, phi: S.state.phi, moved: false };
@@ -803,6 +869,7 @@
     };
 
     pp.mouseDragged = function () {
+      pp.loop();
       if (globeDrag) {
         const dx = pp.mouseX - globeDrag.x;
         if (Math.abs(dx) > 2) globeDrag.moved = true;
@@ -817,6 +884,7 @@
     };
 
     pp.mouseReleased = function () {
+      pp.loop();
       if (globeDrag) {
         const moved = globeDrag.moved; globeDrag = null;
         if (!moved && globeRect) {
@@ -847,6 +915,7 @@
     };
 
     pp.mouseWheel = function (e) {
+      pp.loop();
       if (pp.mouseX < 0 || pp.mouseY < 0 || pp.mouseX > pp.width || pp.mouseY > pp.height) return;
       const st = S.state;
       /* 球面モードでは Shift かホイール上での横方向を回転に割り当てる。
@@ -855,6 +924,7 @@
       if (st.view3d && (e.shiftKey || inGlobe(pp.mouseX, pp.mouseY))) {
         S.actions.setPhi(st.phi + (e.deltaY > 0 ? 0.1 : -0.1));
         scheduleSnap(220);
+        if (e.preventDefault) e.preventDefault();   // p5 2.x では return false だけに頼らない
         return false;
       }
       const k0 = st.view.k == null ? fitK : st.view.k;
@@ -866,6 +936,7 @@
         ty: cy - (cy - st.view.ty) * (k1 / k0),
         k: k1,
       });
+      if (e.preventDefault) e.preventDefault();     // p5 2.x では return false だけに頼らない
       return false;
     };
   }
@@ -894,8 +965,10 @@
   function mount(el) {
     host = el;
     new p5(sketch);
-    const ro = new ResizeObserver(() => { if (p) p.windowResized(); });
+    const ro = new ResizeObserver(() => { if (p) { p.loop(); p.windowResized(); } });
     ro.observe(el);
+    // 状態が変わったら描画を再開する(静止時は noLoop で眠っているため)
+    S.subscribe(() => { if (p) p.loop(); });
   }
 
   LDR.canvas = {

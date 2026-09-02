@@ -59,8 +59,6 @@ def asBinApp (e0 : Expr) : Option (Name × Expr × Expr) :=
     if args.size ≥ 2 then some (r, args[args.size - 2]!, args[args.size - 1]!) else none
   | _ => none
 
-@[inherit_doc asBinApp] abbrev asBinRel := asBinApp
-
 /-- 比較は reducible 透明度の defeq で行う。
 
     構造的等価だけで比べると、暗黙引数の与え方や `mdata` の差で同じものを
@@ -279,9 +277,6 @@ structure DirectDeps where
   typeDeps  : NameSet := {}
   valueDeps : NameSet := {}
   deriving Inhabited
-
-def DirectDeps.union (a b : DirectDeps) : DirectDeps :=
-  { typeDeps := a.typeDeps.union b.typeDeps, valueDeps := a.valueDeps.union b.valueDeps }
 
 /-- 型依存と値依存を合わせた全体。 -/
 def DirectDeps.all (d : DirectDeps) : NameSet := d.typeDeps.union d.valueDeps

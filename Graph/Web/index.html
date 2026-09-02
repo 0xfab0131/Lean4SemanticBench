@@ -5,17 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>L4SB </title>
 
-<script src="https://cdn.tailwindcss.com"></script>
-<script>
-  tailwind.config = {
-    darkMode: "class",
-    theme: { extend: { fontFamily: {
-      mono: ['ui-monospace','SFMono-Regular','Menlo','Consolas','monospace'],
-      sans: ['system-ui','-apple-system','Hiragino Sans','Noto Sans JP','sans-serif'],
-    } } }
-  };
-</script>
-<script src="https://cdn.jsdelivr.net/npm/p5@1/lib/p5.min.js"></script>
+<!-- CDN は厳密な版でピンする(浮動版は外部更新で配置が崩れ、再現性も失う)。
+     Tailwind v4 の公式ブラウザ配布は @tailwindcss/browser。設定は CSS で行う
+     (inline の tailwind.config は v3 Play CDN の機構で、v4 では効かない)。 -->
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3"></script>
+<style type="text/tailwindcss">
+  /* class 方式の dark を復元する(v4 の既定は prefers-color-scheme。
+     本アプリは themeBtn で html.dark を切り替える設計)。 */
+  @custom-variant dark (&:where(.dark, .dark *));
+  @theme {
+    --font-sans: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  /* v4 で button の cursor 既定が default に変わった。操作感を維持する。 */
+  @layer base {
+    button:not(:disabled) { cursor: pointer; }
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/p5@2.3.1/lib/p5.min.js"></script>
 
 <style>
   html, body { height: 100%; overscroll-behavior: none; }
@@ -57,7 +64,7 @@
 
   <!-- ============ 上部バー ============ -->
   <header class="shrink-0 h-12 px-3 flex items-center gap-2 border-b border-stone-200 dark:border-stone-800
-                 bg-white/80 dark:bg-stone-900/80 backdrop-blur">
+                 bg-white/80 dark:bg-stone-900/80 backdrop-blur-sm">
     <button id="btnSide" class="shrink-0 w-9 h-9 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-500 text-[16px]" title="一覧の開閉">☰</button>
     <span class="shrink-0 text-[14px] font-medium tracking-tight hidden lg:inline"
           title="Lean4SemanticBench">L4SB</span>
@@ -160,7 +167,7 @@
               <div class="flex items-center gap-1 flex-wrap">
                 <span class="text-[11.5px] text-stone-500 mr-1">種別</span>
                 <span id="kindChips" class="flex gap-1 flex-wrap"></span>
-                <button id="btnClearKinds" class="px-1.5 py-0.5 rounded text-[11px] text-stone-400 hover:text-stone-700">解除</button>
+                <button id="btnClearKinds" class="px-1.5 py-0.5 rounded-sm text-[11px] text-stone-400 hover:text-stone-700">解除</button>
               </div>
             </div>
           </div>
@@ -171,7 +178,7 @@
       <div id="canvasHost" class="flex-1 min-h-0 relative bg-white dark:bg-stone-900">
         <!-- 探索に一番よく使うので、視線が置かれるキャンバスの内側に置く -->
         <div class="absolute left-3 bottom-3 z-10 flex items-center gap-1 p-1 rounded-xl
-                    bg-white/90 dark:bg-stone-800/90 border border-stone-200 dark:border-stone-700 shadow-sm backdrop-blur">
+                    bg-white/90 dark:bg-stone-800/90 border border-stone-200 dark:border-stone-700 shadow-sm backdrop-blur-sm">
           <button id="btnBack" class="w-10 h-9 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 text-[17px]"
                   title="ひとつ登る  Ctrl+Z / Backspace / マウスの戻るボタン">←</button>
           <button id="btnFwd" class="w-10 h-9 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-700 text-[17px]"
@@ -211,7 +218,7 @@
           <span class="text-[11px] uppercase tracking-wide text-stone-400">探索履歴</span>
           <span id="histCount" class="text-[10.5px] text-stone-400"></span>
           <span class="flex-1"></span>
-          <button id="btnHistClear" class="text-[10.5px] px-1.5 py-0.5 rounded text-stone-400 hover:text-stone-700
+          <button id="btnHistClear" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
                   hover:bg-stone-100 dark:hover:bg-stone-800">消去</button>
         </summary>
         <div id="histBody" class="max-h-44 overflow-y-auto px-1.5 pb-1.5"></div>
@@ -223,11 +230,11 @@
           <span class="text-[11px] uppercase tracking-wide text-stone-400">ピン留め</span>
           <span id="pinCount" class="text-[10.5px] text-stone-400"></span>
           <span class="flex-1"></span>
-          <button id="btnPinCopy" class="text-[10.5px] px-1.5 py-0.5 rounded text-stone-400 hover:text-stone-700
+          <button id="btnPinCopy" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
                   hover:bg-stone-100 dark:hover:bg-stone-800" title="全ピンを JSON でクリップボードへ">コピー</button>
-          <button id="btnPinSave" class="text-[10.5px] px-1.5 py-0.5 rounded text-stone-400 hover:text-stone-700
+          <button id="btnPinSave" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
                   hover:bg-stone-100 dark:hover:bg-stone-800" title="全ピンを JSON ファイルに保存">保存</button>
-          <button id="btnPinLoad" class="text-[10.5px] px-1.5 py-0.5 rounded text-stone-400 hover:text-stone-700
+          <button id="btnPinLoad" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
                   hover:bg-stone-100 dark:hover:bg-stone-800" title="JSON ファイルから取り込み">取込</button>
           <input id="pinFile" type="file" accept=".json" class="hidden">
         </summary>
@@ -278,7 +285,7 @@
       一度読み込んだものはブラウザ内に保持され、次回は自動で復元されます。
     </p>
     <input id="fileInput" type="file" accept=".jsonl,.json,.txt"
-           class="text-[12.5px] file:mr-2 file:px-2 file:py-1 file:rounded file:border-0
+           class="text-[12.5px] file:mr-2 file:px-2 file:py-1 file:rounded-sm file:border-0
                   file:bg-stone-200 dark:file:bg-stone-700 file:text-[12.5px]">
     <textarea id="dataText" rows="9" spellcheck="false"
       class="w-full font-mono text-[11.5px] leading-relaxed p-2 rounded-lg

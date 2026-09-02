@@ -315,6 +315,7 @@
       if (d && m && m.target) {
         const rev = (m.target.gitRev || "").slice(0, 8);
         status += `\n来歴: ${m.target.name || "?"}${rev ? " @ " + rev : ""}`
+          + (m.target.dirty ? "（dirty: 未コミットの変更あり）" : "")
           + ` · ${m.target.toolchain || "?"}`
           + (m.modules ? ` · ${m.modules.join(" ")}` : "")
           + (m.generatedAt ? ` · ${m.generatedAt}` : "");

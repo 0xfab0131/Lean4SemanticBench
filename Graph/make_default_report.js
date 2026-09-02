@@ -30,13 +30,20 @@ const text = fs.readFileSync(src, "utf8");
 const lines = text.split("\n").filter((l) => l.trim()).length;
 
 /* 来歴サイドカー(report.meta.json)があれば一緒に埋め込む。
-   ビューアが「いつ・何の・どの環境の解析を見ているか」を示せるようにする。 */
+   ビューアが「いつ・何の・どの環境の解析を見ているか」を示せるようにする。
+   埋め込む前に declCount と実際の行数を照合する — 取り残された別レポートの
+   来歴を誤って付ける(来歴が嘘をつく)ことを構造的に防ぐ(信頼でなく検証)。 */
 let metaJs = "";
 const metaPath = src.replace(/\.jsonl$/, ".meta.json");
 if (fs.existsSync(metaPath)) {
   try {
     const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
-    metaJs = "window.LDR.DEFAULT_META = " + JSON.stringify(meta) + ";\n";
+    const actual = text.split("\n").filter((l) => l.trim()).length;
+    if (meta.declCount === actual) {
+      metaJs = "window.LDR.DEFAULT_META = " + JSON.stringify(meta) + ";\n";
+    } else {
+      console.error(`来歴の宣言数 (${meta.declCount}) が実際の行数 (${actual}) と一致しないため、来歴は埋め込みません`);
+    }
   } catch (e) { /* 来歴が読めなくてもレポートの埋め込みは続ける */ }
 }
 

@@ -29,11 +29,18 @@
   /* slotMin は「1 ノードが占める弧長の下限」。ここを削ると密な層でノードが
      点に潰れ、押すまで何か分からなくなる。読める幅を下限として確保し、
      その代わりに 1 層の表示上限（density）で溢れを制御する。 */
-  /* dr(隣接リングの最小間隔)の下限には導出がある。同角 θ の隣接リング間で
-     Δx ≈ dr·|cosθ|、Δy ≈ dr·|sinθ| であり、軸平行矩形の非重複には
-     「Δx ≥ 幅 または Δy ≥ 高さ」が要る。最悪角(tanθ = h/w)での必要条件は
+  /* dr(隣接リングの最小間隔)の下限には導出がある。リング間の中心間距離は
+     常に ≥ dr であり、軸平行矩形の重なりは距離 < √(w² + h²) を要するから、
         dr ≥ √(w_max² + h²) = √(186² + 34²) ≈ 189.1
-     旧値 136 はこれを下回り、扇の水平寄りで原理的に重なり得た(自己解析で実測)。 */
+     で任意の角度差に対して重なりが不可能になる。旧値 136 はこれを下回り、
+     扇の水平寄りで原理的に重なり得た(自己解析で実測して 200 に修正)。
+
+     [不変条件] 同リング隣接にはこの距離論法が使えない(中心間距離 ≈ slot ≥
+     slotMin = 94 < 189)。成分評価では、危険角 |cosθ| ≈ NODE_H/slot での余白が
+        Δx − w = slot·√(1 − (NODE_H/slot)²) − (slot − 12) ≈ 5px  (slot = slotMin)
+     しかない。slotMin(94)・ノード幅の控除(w = slot − 12)・NODE_H(34)は
+     この余白で互いに結合しており、どれか一つを単独で「改善」すると静かに壊れる。
+     経験的ガードは ldr_check の全深さ・矩形重なり検査。 */
   const GEO = {
     r0: 196, dr: 200, slotMax: 200, slotMin: 94, slotPref: 202,
     rSoft: 1180,
@@ -191,6 +198,9 @@
     for (const [n, nd] of Object.entries(state.nodes)) {
       if (!nd.shape || !nd.shapeRel) continue;
       if (nd.usesSorry) continue;    // sorry の主張を「証明済みの法則」として数えない
+      // 法則は命題である。型クラスのインスタンス(C α α 等)は構文上 refl の形を
+      // 持つがデータであって証明ではない(自己解析で MonadLiftT 等の行として実測)。
+      if (!nd.isProp) continue;
       const rel = nd.shapeRel;
       if (!rows.has(rel)) rows.set(rel, { rel, total: 0, laws: {}, pairs: {} });
       const row = rows.get(rel);
@@ -382,20 +392,30 @@
                : state.refFilter === "value" ? idx.refValue
                : idx.refAll;
     /* 論理の骨組みを潰して、実際に使われた補題が前面に出るようにする。
-       表示のためだけの縮約で、上の min(↓d) や |↓d| は元のグラフで測っている。 */
+       表示のためだけの縮約で、上の min(↓d) や |↓d| は元のグラフで測っている。
+       縮約辺の種(型/値)は初手から継承した上書き表で引く。既存の edgeKind は
+       元グラフの直接辺しか知らないため、これ無しでは縮約辺が全て既定の
+       「型依存」の見た目に落ちる。 */
+    derived.edgeKindOverlay = null;
     if (state.hideFrame && state.granularity === "decl" && LDR.roles) {
       const names = Object.keys(nodes);
       const hidden = (n) => LDR.roles.roleOf(n, nodes[n]) === "frame";
       if (!cache.contracted) cache.contracted = {};
       const ck = state.edgeMode + "|" + state.refFilter;
       if (!cache.contracted[ck]) {
+        const kindDep = (u, v) => idx.edgeKind[u + " " + v] || "type";
+        const kindRef = (u, v) => (idx.refKind && idx.refKind[u + " " + v]) || "type";
         cache.contracted[ck] = {
-          dep: G.contractThrough(idx.dep, hidden, names),
-          ref: G.contractThrough(refAdj || {}, hidden, names),
+          dep: G.contractThrough(idx.dep, hidden, names, kindDep),
+          ref: G.contractThrough(refAdj || {}, hidden, names, kindRef),
         };
       }
-      depAdj = cache.contracted[ck].dep;
-      refAdj = cache.contracted[ck].ref;
+      depAdj = cache.contracted[ck].dep.adj;
+      refAdj = cache.contracted[ck].ref.adj;
+      derived.edgeKindOverlay = {
+        dep: cache.contracted[ck].dep.kind,
+        ref: cache.contracted[ck].ref.kind,
+      };
     }
     const specs = [
       { id: "dep", adj: depAdj, sector: SECTORS.dep },
@@ -440,10 +460,12 @@
           const kk = u + " " + v;
           if (seen.has(kk)) continue;
           seen.add(kk);
+          const ov = derived.edgeKindOverlay;
           derived.edges.push({
             u, v, cone: cone.id,
-            kind: cone.id === "dep" ? (idx.edgeKind[kk] || "type")
-                                    : ((idx.refKind && idx.refKind[kk]) || "type"),
+            kind: cone.id === "dep"
+              ? ((ov && ov.dep[kk]) || idx.edgeKind[kk] || "type")
+              : ((ov && ov.ref[kk]) || (idx.refKind && idx.refKind[kk]) || "type"),
           });
         }
       }
@@ -510,13 +532,15 @@
       });
       const own = new Set(Object.keys(cone.pos));
       const edges = [];
+      const ov = derived.edgeKindOverlay;
       for (const u of [c, ...own]) {
         for (const v of sp.adj[u] || []) {
           if (!own.has(v)) continue;
           const kk = u + " " + v;
           edges.push({ u, v, cone: sp.id,
-            kind: sp.id === "dep" ? (idx.edgeKind[kk] || "type")
-                                  : ((idx.refKind && idx.refKind[kk]) || "type") });
+            kind: sp.id === "dep"
+              ? ((ov && ov.dep[kk]) || idx.edgeKind[kk] || "type")
+              : ((ov && ov.ref[kk]) || (idx.refKind && idx.refKind[kk]) || "type") });
         }
       }
       for (const [n, p] of Object.entries(cone.pos)) {

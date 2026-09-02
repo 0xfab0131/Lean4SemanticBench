@@ -53,10 +53,11 @@ $PROG — Lean4SemanticBench 展開コマンド v$L4SB_VERSION
   $PROG check  [<report.jsonl> | <target-dir>] [--decl <名前>...]
   $PROG web    [<report.jsonl> | <target-dir>]
   $PROG all    <target-dir> [report と同じ引数...]
-  $PROG clean  <target-dir>
+  $PROG clean  <target-dir> [--purge]
 
   init    対象の内側に衛星ワークスペース <target>/$SAT_DIRNAME/ を生成する(冪等)
-  report  対象をビルドし、decl_report で report.jsonl + report.meta.json を生成する
+  report  対象をビルドし(=対象の .lake/build を更新する)、decl_report で
+          report.jsonl + report.meta.json を生成する
   check   ldr_check.js でレポートの不変条件を検査する
   web     レポートをビューアへ埋め込む(Graph/Web/index.html を file:// で開くだけ)
   all     init → report → check → web を一括で行う(引数は report へ透過)
@@ -399,14 +400,32 @@ cmd_report() {
   ( cd "$sat" && lake env "$bin" "${mods[@]}" ${pass[@]+"${pass[@]}"} > report.jsonl ) \
     || die "$run_hint"
   [ -s "$report" ] || die "レポートが空です(モジュール名が正しいか確認してください: ${mods[*]})"
+  # 事後検証: 全行が name を持つ JSON であること。stdout 汚染・部分書き込みの
+  # 有無を議論でなく機械検査で潰す(check を経ない素の report でも保証する)。
+  node -e '
+    const fs = require("fs");
+    const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((l) => l.trim());
+    let bad = 0;
+    lines.forEach((l, i) => {
+      try { if (!JSON.parse(l).name) throw 0; }
+      catch { console.error(`  ${i + 1} 行目が JSON として不正です`); bad = 1; }
+    });
+    process.exit(bad);
+  ' "$report" || die "生成された JSONL に不正な行があります(stdout 汚染・部分書き込みの疑い)"
 
   # 来歴サイドカー。ベンチとして比較可能にするため、何をいつどの環境で
   # 解析したかを機械可読で残す(本体 JSONL の決定的順序には手を触れない)。
-  local tool_rev target_rev
+  # 絶対パスは記録しない(公開共有時のローカル情報漏れ。名前+rev で同定は足りる)。
+  # 作業ツリーが dirty なら旗を立てる — dirty のとき gitRev 単独では嘘になるため。
+  local tool_rev target_rev target_dirty=""
   tool_rev="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
   target_rev="$(git -C "$target" rev-parse HEAD 2>/dev/null || echo "")"
+  if [ -n "$target_rev" ] && [ -n "$(git -C "$target" status --porcelain 2>/dev/null)" ]; then
+    target_dirty=1
+  fi
   L4SB_M_TOOLVER="$L4SB_VERSION+$tool_rev" \
-  L4SB_M_TARGET="$L4SB_NAME" L4SB_M_TARGETDIR="$target" L4SB_M_TARGETREV="$target_rev" \
+  L4SB_M_TARGET="$L4SB_NAME" L4SB_M_TARGETREV="$target_rev" \
+  L4SB_M_DIRTY="$target_dirty" \
   L4SB_M_TOOLCHAIN="$L4SB_TOOLCHAIN" L4SB_M_MODULES="${mods[*]}" \
   L4SB_M_EXTRA="${pass[*]:-}" \
   L4SB_M_REPORT="$report" \
@@ -416,8 +435,11 @@ cmd_report() {
     const lines = text.split("\n").filter((l) => l.trim());
     const meta = {
       tool: "Lean4SemanticBench", version: e.L4SB_M_TOOLVER,
-      target: { name: e.L4SB_M_TARGET, dir: e.L4SB_M_TARGETDIR,
-                gitRev: e.L4SB_M_TARGETREV || null, toolchain: e.L4SB_M_TOOLCHAIN },
+      target: { name: e.L4SB_M_TARGET,
+                gitRev: e.L4SB_M_TARGETREV || null,
+                // dirty: rev の指すコミットに未反映の変更がある(再現性の限定)
+                dirty: e.L4SB_M_DIRTY === "1",
+                toolchain: e.L4SB_M_TOOLCHAIN },
       modules: e.L4SB_M_MODULES.split(" "),
       // decl_report への透過引数(--values 等はレポート内容に影響する入力)
       extraArgs: e.L4SB_M_EXTRA ? e.L4SB_M_EXTRA.split(" ") : [],
@@ -479,7 +501,13 @@ cmd_web() {
     [ -f "$report" ] || die "レポートがありません: $report"
     if [ "$report" != "$GRAPH_DIR/report.jsonl" ]; then
       cp "$report" "$GRAPH_DIR/report.jsonl"
-      [ -f "${report%.jsonl}.meta.json" ] && cp "${report%.jsonl}.meta.json" "$GRAPH_DIR/report.meta.json"
+      if [ -f "${report%.jsonl}.meta.json" ]; then
+        cp "${report%.jsonl}.meta.json" "$GRAPH_DIR/report.meta.json"
+      else
+        # 来歴の無いレポートに、以前の別レポートの来歴が付いて「嘘」になるのを防ぐ。
+        # meta なしは「来歴表示なし」という正直な状態に落とす。
+        rm -f "$GRAPH_DIR/report.meta.json"
+      fi
     fi
   fi
   [ -s "$GRAPH_DIR/report.jsonl" ] || die "Graph/report.jsonl がありません。'$PROG web <report.jsonl | target-dir>' で渡してください"
@@ -505,16 +533,45 @@ cmd_all() {
 }
 
 # ---------- clean ----------
+# 既定は衛星のみ削除。--purge を付けると、衛星が共有 packagesDir へ持ち込んだ
+# 「対象の manifest に無いパッケージ」(依存ゼロの対象での importGraph / Cli 等)
+# も削除する。既定で残すのは、再解析時の再クローンを省くキャッシュとして
+# 有用なため。判定は verify_manifest の EXTRA(対象に無い git 依存)を流用する。
 cmd_clean() {
-  [ $# -eq 1 ] || die "clean: 対象ディレクトリを一つ指定してください"
-  local target
-  target="$(resolve_target "$1")"
+  local target="" purge=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --purge) purge=1; shift ;;
+      -*) die "clean: 不明なオプション: $1" ;;
+      *) [ -z "$target" ] || die "clean: 対象は一つだけ指定してください"; target="$1"; shift ;;
+    esac
+  done
+  [ -n "$target" ] || die "clean: 対象ディレクトリを指定してください"
+  target="$(resolve_target "$target")"
   local sat="$target/$SAT_DIRNAME"
   [ -e "$sat" ] || { info "衛星はありません: $sat"; return 0; }
   # 生成物であることを確認してから消す(自分の印が無いディレクトリは消さない)
   [ -f "$sat/.l4sb-stamp" ] || die "$sat に $PROG の生成印がありません。手動で確認してください"
+
+  local -a extras=()
+  if [ "$purge" -eq 1 ] && [ -f "$sat/lake-manifest.json" ]; then
+    load_info "$target"
+    local line kind name rest
+    while IFS=' ' read -r kind name rest; do
+      [ "$kind" = "EXTRA" ] && extras+=("$name")
+    done < <(node "$LIB_DIR/verify_manifest.js" "$target" "$sat" || true)
+  fi
+
   rm -rf "$sat"
   info "削除しました: $sat"
+
+  for name in ${extras[@]+"${extras[@]}"}; do
+    local pdir="$target/$L4SB_PKGDIR/$name"
+    if [ -d "$pdir" ]; then
+      rm -rf "$pdir"
+      info "purge: 衛星が持ち込んだ共有パッケージを削除しました: $pdir"
+    fi
+  done
 }
 
 # ---------- dispatcher ----------

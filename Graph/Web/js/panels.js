@@ -96,7 +96,7 @@
         class="w-full text-left pr-2 rounded-md flex items-center gap-2 ${cls}">
         ${dot(nd.kind, 6)}
         <span class="font-mono text-[11px] truncate flex-1">${esc(shortOf(n))}</span>
-        ${nd.usesSorry ? '<span class="text-[9.5px] px-1 rounded bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300 shrink-0">sorry</span>' : ""}
+        ${nd.usesSorry ? '<span class="text-[9.5px] px-1 rounded-sm bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300 shrink-0">sorry</span>' : ""}
         ${badge !== undefined ? `<span class="text-[9.5px] text-stone-400 tabular-nums shrink-0">${badge}</span>` : ""}
       </button>`,
     };
@@ -189,7 +189,10 @@
   }
 
   function renderList(st, dv) {
-    const k = [st.query, st.listMode, st.sortMetric, st.onlySorry, [...st.kindFilter].sort().join(","),
+    // edgeMode を鍵に含める:「依存順」の並びは metrics(edgeMode 依存)で決まる。
+    // 欠けていると型のみ切替後も古い並びのまま陳腐化する(監査で発見)。
+    const k = [st.query, st.listMode, st.sortMetric, st.onlySorry, st.edgeMode,
+      [...st.kindFilter].sort().join(","),
       [...st.treeClosed].sort().join(","), st.order.length, Object.keys(st.nodes).length,
       dv.center, st.selected].join("|");
     once("list", k, () => {
@@ -208,7 +211,8 @@
   const STD = new Set(["propext", "Classical.choice", "Quot.sound"]);
 
   function renderAudit(st) {
-    once("audit", Object.keys(st.nodes).length + "|" + st.onlySorry, () => {
+    // 「無条件で閉じる」件数は metrics(edgeMode 依存)から来る。鍵に含める。
+    once("audit", Object.keys(st.nodes).length + "|" + st.onlySorry + "|" + st.edgeMode, () => {
       const own = Object.values(st.nodes).filter((n) => !n.external);
       const sorry = own.filter((n) => n.usesSorry).length;
       const extra = own.filter((n) => n.axioms.some((a) => !STD.has(a) && a !== "sorryAx")).length;
@@ -259,7 +263,7 @@
      この区別は「最初に無条件で与えられる定義」「追加の理論や条件を要する定義」
      「条件付きだが無条件のものから無条件に得られる定義」を分けるためのもの。 */
   function condChip(name, nd) {
-    const cls = (c) => `text-[10px] px-1.5 py-0.5 rounded ${c}`;
+    const cls = (c) => `text-[10px] px-1.5 py-0.5 rounded-sm ${c}`;
     if (nd.numHyp || nd.numInst) {
       return `<span class="${cls("bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300")}"
         title="仮定 ${nd.numHyp} / インスタンス ${nd.numInst} を要求している">条件 ${nd.numHyp + nd.numInst}</span>`;
@@ -332,7 +336,7 @@
         const cls = bad ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200"
                   : extra ? "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200"
                   : "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300";
-        return `<button data-trace="${esc(a)}" class="font-mono text-[10.5px] px-1.5 py-0.5 rounded ${cls}"
+        return `<button data-trace="${esc(a)}" class="font-mono text-[10.5px] px-1.5 py-0.5 rounded-sm ${cls}"
                   title="この公理に至る経路を表示">${esc(a)}</button>`;
       }).join(" ") || `<span class="text-[11px] text-emerald-600 dark:text-emerald-400">なし（公理非依存）</span>`;
 
@@ -352,13 +356,13 @@
            class="text-[11px] px-2 py-0.5 rounded-md border border-stone-300 dark:border-stone-600
                   hover:bg-stone-100 dark:hover:bg-stone-800">🔎 LeanSearch</a>`;
 
-      const chip = (t, cls) => `<span class="text-[10px] px-1.5 py-0.5 rounded ${cls}">${t}</span>`;
+      const chip = (t, cls) => `<span class="text-[10px] px-1.5 py-0.5 rounded-sm ${cls}">${t}</span>`;
       const sh = LDR.sig.SHAPE[nd.shape];
       const marks = [
         nd.usesSorry ? chip("sorry を含む", "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300") : "",
         nd.isInstance ? chip("instance", "bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-200") : "",
         nd.reducibility === "reducible" ? chip("reducible", "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300") : "",
-        sh ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200"
+        sh ? `<span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200"
                 title="${esc(sh.note)}">${sh.ja}</span>` : "",
         condChip(name, nd),
       ].filter(Boolean).join(" ");
@@ -369,7 +373,7 @@
         <div class="flex items-center gap-2 flex-wrap">
           ${dot(nd.kind, 8)}
           <span class="font-mono text-[12.5px] font-medium break-all leading-tight">${esc(name)}</span>
-          <span class="text-[10px] px-1.5 py-0.5 rounded bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300">${kinfo(nd.kind).ja}</span>
+          <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300">${kinfo(nd.kind).ja}</span>
           <span class="font-mono text-[9.5px] text-stone-500" title="${esc(nd.module)}">${esc(shortOf(nd.module))}${nd.line ? ":" + nd.line : ""}</span>
           ${marks}
           ${nd.axioms.length
@@ -393,13 +397,13 @@
     const sh = LDR.sig.SHAPE[nd.shape];
     const concl = LDR.sig.abbrev(nd.conclusion || nd.typeString || "");
     return `<button data-sel="${esc(n)}" title="${esc(n)}"
-      class="w-full text-left pl-2 pr-2 py-1 rounded border-l-2 hover:bg-stone-100 dark:hover:bg-stone-800
+      class="w-full text-left pl-2 pr-2 py-1 rounded-sm border-l-2 hover:bg-stone-100 dark:hover:bg-stone-800
              ${st.selected === n ? "bg-stone-100 dark:bg-stone-800" : ""}"
       style="border-color:${col}66">
       <div class="flex items-center gap-1.5">
         ${dot(nd.kind, 6)}
         <span class="font-mono text-[10.5px] truncate flex-1">${esc(shortOf(n))}</span>
-        ${role === "axiom" ? '<span class="text-[9px] px-1 rounded bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-200 shrink-0">公理</span>' : ""}
+        ${role === "axiom" ? '<span class="text-[9px] px-1 rounded-sm bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-200 shrink-0">公理</span>' : ""}
         ${sh ? `<span class="text-[9px] shrink-0" style="color:${col}">${sh.ja}</span>` : ""}
         ${nd.usesSorry ? '<span class="text-[9px] text-rose-600 shrink-0">sorry</span>' : ""}
       </div>
@@ -459,7 +463,7 @@
           class="font-mono text-[10.5px] text-left hover:underline break-all leading-tight">${esc(shortOf(name))}</button>
       </div>
       <div class="flex items-baseline gap-1 pl-4">
-        ${role === "axiom" ? `<span class="text-[8.5px] px-1 rounded bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-200">公理</span>` : ""}
+        ${role === "axiom" ? `<span class="text-[8.5px] px-1 rounded-sm bg-orange-100 text-orange-800 dark:bg-orange-950 dark:text-orange-200">公理</span>` : ""}
         ${sh ? `<span class="text-[8.5px]" style="color:${col}" title="${esc(sh.note)}">${sh.ja}</span>` : ""}
       </div>
       ${concl ? `<div class="pl-4 font-mono text-[9.5px] text-stone-500 dark:text-stone-400 leading-snug break-words"
@@ -485,14 +489,14 @@
       ? `<div class="flex items-baseline gap-1 flex-wrap mt-1">
            <span class="text-[9px] shrink-0" style="color:${color}">${label}</span>
            ${list.map((v) => `<button data-sel="${esc(v.name)}" title="${esc(v.name)}"
-             class="font-mono text-[9px] px-1 rounded bg-stone-100 dark:bg-stone-800
+             class="font-mono text-[9px] px-1 rounded-sm bg-stone-100 dark:bg-stone-800
                     text-stone-600 dark:text-stone-300 hover:bg-stone-200">${esc(shortOf(v.name))}</button>`).join("")}
          </div>` : "";
 
     return `<div>
       ${prem}
       <div class="flex items-center gap-2 mt-1.5 mb-1">
-        <span class="h-[1.5px] flex-1 rounded" style="background:${roleColor(LDR.roles.roleOf(name, nd))}88"></span>
+        <span class="h-[1.5px] flex-1 rounded-sm" style="background:${roleColor(LDR.roles.roleOf(name, nd))}88"></span>
         <span class="font-mono text-[9px] text-stone-500 dark:text-stone-400 truncate max-w-[60%]"
               title="${esc(name)}">${esc(shortOf(name))}</span>
       </div>
@@ -502,7 +506,7 @@
       ${parts.frame.length ? `<details class="mt-1"><summary class="cursor-pointer text-[9px] text-stone-400">
           骨組み ${parts.frame.length} 件（論理結合子・再帰子）</summary>
         <div class="flex flex-wrap gap-1 mt-1">${parts.frame.map((v) =>
-          `<span class="font-mono text-[9px] px-1 rounded bg-stone-100 dark:bg-stone-800 text-stone-400"
+          `<span class="font-mono text-[9px] px-1 rounded-sm bg-stone-100 dark:bg-stone-800 text-stone-400"
             >${esc(shortOf(v.name))}</span>`).join("")}</div></details>` : ""}
     </div>`;
   }
@@ -512,12 +516,12 @@
     const nd = st.nodes[name];
     const body = $("depBody");
     const chips = st.previewHist.map((h) => `<button data-preview="${esc(h)}" title="${esc(h)}"
-        class="font-mono text-[10px] px-1.5 py-0.5 rounded ${h === name
+        class="font-mono text-[10px] px-1.5 py-0.5 rounded-sm ${h === name
           ? "bg-indigo-600 text-white"
           : "bg-stone-100 text-stone-600 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-300"}"
         >${esc(shortOf(h))}</button>`).join(" ");
     const modeBtn = (v, l) => `<button data-follow="${v}"
-        class="px-2 py-0.5 text-[10.5px] rounded ${(!!st.previewFollow) === (v === "1")
+        class="px-2 py-0.5 text-[10.5px] rounded-sm ${(!!st.previewFollow) === (v === "1")
           ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
           : "text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800"}">${l}</button>`;
     const header = `
@@ -536,7 +540,7 @@
         <div class="flex items-baseline gap-1.5 flex-wrap">
           ${dot(nd.kind, 7)}
           <span class="font-mono text-[12px] font-medium break-all">${esc(name)}</span>
-          <button data-nav="${esc(name)}" class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-600 text-white hover:bg-indigo-500">中心にする</button>
+          <button data-nav="${esc(name)}" class="text-[10px] px-1.5 py-0.5 rounded-sm bg-indigo-600 text-white hover:bg-indigo-500">中心にする</button>
         </div>
         <div class="mt-1 rounded-md border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-stone-950 px-2 py-1">
           ${signatureBlock(nd) || `<span class="text-[11px] text-stone-400">シグネチャ情報なし</span>`}
@@ -550,11 +554,11 @@
         ${nd.typeString ? `<details class="mt-1">
           <summary class="cursor-pointer text-[10px] text-stone-400 hover:text-stone-600">原文を表示</summary>
           <pre class="mt-1 font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-words
-            bg-stone-50 dark:bg-stone-950 border border-stone-200 dark:border-stone-700 rounded px-2 py-1
+            bg-stone-50 dark:bg-stone-950 border border-stone-200 dark:border-stone-700 rounded-sm px-2 py-1
             max-h-48 overflow-y-auto">${esc(nd.typeString)}</pre></details>` : ""}
         ${nd.valueString ? `<details class="mt-1.5"><summary class="cursor-pointer text-[10.5px] text-stone-400">証明項</summary>
           <pre class="mt-1 font-mono text-[10px] whitespace-pre-wrap break-words leading-snug
-            bg-stone-50 dark:bg-stone-950 border border-stone-200 dark:border-stone-700 rounded px-2 py-1
+            bg-stone-50 dark:bg-stone-950 border border-stone-200 dark:border-stone-700 rounded-sm px-2 py-1
             max-h-48 overflow-y-auto">${esc(nd.valueString)}</pre></details>` : ""}
         <div class="mt-2.5 flex items-baseline gap-2">
           <span class="text-[10px] text-stone-400">導出図</span>
@@ -618,17 +622,19 @@
         if (!list.length) {
           return `<div class="h-5 flex items-center justify-center text-[9px] text-stone-300 dark:text-stone-700">·</div>`;
         }
-        return `<button data-sel="${esc(list[0])}" title="${esc(LAW_JA[l])}: ${esc(list[0])}${list.length > 1 ? ` 他 ${list.length - 1} 件` : ""}"
+        // 二演算法則(吸収・分配)は相方が意味の半分を担う。tooltip に対を明示する
+        const partners = r.pairs && r.pairs[l] ? ` — 相方 ${[...r.pairs[l]].map(shortOf).join(", ")}` : "";
+        return `<button data-sel="${esc(list[0])}" title="${esc(LAW_JA[l])}${esc(partners)}: ${esc(list[0])}${list.length > 1 ? ` 他 ${list.length - 1} 件` : ""}"
           class="h-5 w-full rounded-[3px] text-[9px] font-medium text-white flex items-center justify-center hover:brightness-110"
           style="background:hsl(${LAW_HUE[l]},58%,48%)">${list.length > 1 ? list.length : ""}</button>`;
       }).join("");
-      return `<div class="grid gap-px items-center hover:bg-stone-50 dark:hover:bg-stone-800/50 rounded"
+      return `<div class="grid gap-px items-center hover:bg-stone-50 dark:hover:bg-stone-800/50 rounded-sm"
           style="grid-template-columns: minmax(96px,1fr) repeat(${laws.length}, 22px) 62px">
         <button data-sel="${esc(r.rel)}" title="${esc(r.rel)}"
           class="text-left font-mono text-[10px] truncate pr-1 hover:underline">${esc(shortOf(r.rel))}</button>
         ${cells}
         <div class="text-right pl-1">${verdict
-          ? `<span class="text-[9px] px-1 py-0.5 rounded font-medium"
+          ? `<span class="text-[9px] px-1 py-0.5 rounded-sm font-medium"
                style="background:hsl(${verdict.h},70%,92%);color:hsl(${verdict.h},60%,30%)">${verdict.t}</span>`
           : `<span class="text-[9px] text-stone-300 dark:text-stone-700">—</span>`}</div>
       </div>`;
@@ -711,7 +717,7 @@
         const onPath = path.has(id);
         out.push(`<button data-hist="${id}" title="${esc(nd.name)}"
           style="padding-left:${4 + depth * 12}px"
-          class="w-full text-left pr-2 py-1 rounded flex items-center gap-1.5
+          class="w-full text-left pr-2 py-1 rounded-sm flex items-center gap-1.5
                  ${isCur ? "bg-indigo-600 text-white"
                          : onPath ? "bg-indigo-50 dark:bg-indigo-950/50 text-indigo-900 dark:text-indigo-200"
                                   : "hover:bg-stone-100 dark:hover:bg-stone-800"}">
@@ -740,12 +746,12 @@
         const t = `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
         return `<div class="flex items-center gap-1 group">
           <button data-pin="${p.id}" title="${esc(p.snap.center)}"
-            class="flex-1 min-w-0 text-left px-2 py-1 rounded hover:bg-stone-100 dark:hover:bg-stone-800">
+            class="flex-1 min-w-0 text-left px-2 py-1 rounded-sm hover:bg-stone-100 dark:hover:bg-stone-800">
             <span class="font-mono text-[11px] truncate block">${esc(shortOf(p.label))}</span>
             <span class="text-[9.5px] text-stone-400">${t} · 深さ${p.snap.baseDepth} · 下錐${{ all: "両方", type: "主張", value: "呼出" }[p.snap.refFilter] || "両方"}${p.snap.expanded.length ? ` · 展開${p.snap.expanded.length}` : ""}</span>
           </button>
           <button data-unpin="${p.id}" title="削除"
-            class="w-6 h-6 shrink-0 rounded text-stone-400 opacity-0 group-hover:opacity-100 hover:bg-stone-200 dark:hover:bg-stone-700">✕</button>
+            class="w-6 h-6 shrink-0 rounded-sm text-stone-400 opacity-0 group-hover:opacity-100 hover:bg-stone-200 dark:hover:bg-stone-700">✕</button>
         </div>`;
       }).join("");
       $("pinCount").textContent = `${st.pins.length}`;
@@ -755,7 +761,10 @@
   /* ================= 最小の仮定 ================= */
   function renderMinimal(st, dv) {
     const tm = dv.trueMinimal || [];
-    once("min", dv.center + "|" + st.traceTarget + "|" + tm.length, () => {
+    // チップの不透明度は「いま描画対象か(n ∈ posAll)」に依存する。
+    // 可視集合の指紋を鍵に含めないと、展開・深さ変更後も古い明暗のままになる。
+    const visSig = Object.keys(dv.posAll || {}).length + "|" + st.baseDepth + "|" + st.expanded.size;
+    once("min", dv.center + "|" + st.traceTarget + "|" + tm.length + "|" + visSig, () => {
       const el = $("minimalBox");
       const vis = dv.posAll || {};
       $("minCount").textContent =
@@ -773,7 +782,7 @@
         <div class="flex items-baseline gap-2 flex-wrap mb-1">
           <span class="text-[10.5px] text-stone-500">押すとそこへ至る経路だけを表示</span>
           ${st.traceTarget ? `<button data-trace="${esc(st.traceTarget)}"
-            class="text-[10.5px] px-1.5 py-0.5 rounded bg-amber-500 text-white">経路表示を解除</button>` : ""}
+            class="text-[10.5px] px-1.5 py-0.5 rounded-sm bg-amber-500 text-white">経路表示を解除</button>` : ""}
         </div>
         <div class="flex flex-wrap gap-1">${tm.length
           ? tm.map(chip).join("")
@@ -808,14 +817,14 @@
       const m = S.metrics();
       $("segMetric").innerHTML = Object.entries(S.METRICS).map(([v, o]) => `<button data-metric="${v}"
         title="${o.mono ? "依存順序と両立する（昇順は線形拡大になる）" : "依存順序とは両立しない量"}"
-        class="px-1.5 py-0.5 text-[10px] rounded ${st.sortMetric === v
+        class="px-1.5 py-0.5 text-[10px] rounded-sm ${st.sortMetric === v
           ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
           : "text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800"}">${o.ja}${o.mono ? " ↑" : ""}</button>`).join("");
       $("metricNote").textContent = m.exact ? "" : "（規模が大きいため深さで代用）";
       $("segGroup").innerHTML = seg("group", st.groupBy, [
         { v: "subject", l: "主題" }, { v: "module", l: "モジュール" }, { v: "kind", l: "種別" }, { v: "none", l: "なし" }]);
       $("segDensity").innerHTML = [24, 36, 48, 72].map((d) => `<button data-density="${d}"
-        class="px-1.5 py-0.5 text-[10.5px] rounded ${st.density === d
+        class="px-1.5 py-0.5 text-[10.5px] rounded-sm ${st.density === d
           ? "bg-white dark:bg-stone-700 shadow-sm text-stone-900 dark:text-stone-100"
           : "text-stone-500 hover:text-stone-800 dark:hover:text-stone-200"}">${d}</button>`).join("");
       // 下の参照錐に入れる辺。既定は「両方」で、呼び出し元も最初から下に開く。
@@ -838,7 +847,7 @@
       const kinds = [...new Set(Object.values(st.nodes).map((n) => n.kind))].sort();
       $("kindChips").innerHTML = kinds.map((k) => {
         const on = st.kindFilter.has(k);
-        return `<button data-kind="${k}" class="px-1.5 py-0.5 rounded text-[11px] flex items-center gap-1
+        return `<button data-kind="${k}" class="px-1.5 py-0.5 rounded-sm text-[11px] flex items-center gap-1
           ${on ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900" : "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300"}">
           ${dot(k, 6)}${kinfo(k).ja}</button>`;
       }).join("");

@@ -262,6 +262,28 @@ function geometry(label) {
   }
   ok(bad === 0, `[${label}] 全ての辺の両端に座標がある`, bad);
   ok(cross === 0, `[${label}] 錐をまたぐ辺が無い`, cross);
+
+  /* 辺交差数(弦近似)。ベジエの実形状でなく P0→P3 の弦で数える参考値。
+     README の交差削減の主張を測定可能にし、反復掃引(未実装)の導入判断の
+     材料にする。端点を共有する辺同士は交差と数えない。合否は付けない。 */
+  const segs = d.edges.map((e) => {
+    const a = e.u === d.center ? { x: 0, y: 0 } : d.posAll[e.u];
+    const b = d.posAll[e.v];
+    return a && b ? { u: e.u, v: e.v, ax: a.x, ay: a.y, bx: b.x, by: b.y } : null;
+  }).filter(Boolean);
+  const ccw = (ax, ay, bx, by, cx, cy) => (by - ay) * (cx - ax) - (bx - ax) * (cy - ay);
+  let crossings = 0;
+  for (let i = 0; i < segs.length; i++)
+    for (let j = i + 1; j < segs.length; j++) {
+      const p = segs[i], q = segs[j];
+      if (p.u === q.u || p.u === q.v || p.v === q.u || p.v === q.v) continue;
+      const d1 = ccw(p.ax, p.ay, p.bx, p.by, q.ax, q.ay);
+      const d2 = ccw(p.ax, p.ay, p.bx, p.by, q.bx, q.by);
+      const d3 = ccw(q.ax, q.ay, q.bx, q.by, p.ax, p.ay);
+      const d4 = ccw(q.ax, q.ay, q.bx, q.by, p.bx, p.by);
+      if (d1 * d2 < 0 && d3 * d4 < 0) crossings++;
+    }
+  console.log(`  [${label}] 辺交差(弦近似) ${crossings} 組`);
 }
 
 for (const d of [1, 2, 3]) {
