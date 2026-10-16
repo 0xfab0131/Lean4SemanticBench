@@ -272,8 +272,11 @@
         : "前回のレポートを復元しました";
     } else if (def) {
       initial = def; source = "既定の監査結果を読み込みました";
-    } else {
+    } else if (LDR.SAMPLE) {
       initial = LDR.SAMPLE; source = "サンプルを表示しています（データボタンから読み込めます）";
+    } else {
+      /* 配置（GitHub Pages）には生成物 js/sample.js を同梱しない。既定の監査結果も無ければ空で始める */
+      initial = ""; source = "レポートがありません（データボタンから読み込めます）";
     }
 
     S.actions.loadText(initial, { silent: true });
@@ -390,7 +393,10 @@
       $("dataDlg").close();
       toast("既定の監査結果を読み込みました");
     });
+    // サンプル（js/sample.js）は生成物で、配置には同梱しない。無ければボタンを出さない
+    if (!LDR.SAMPLE) $("dataSample").classList.add("hidden");
     $("dataSample").addEventListener("click", () => {
+      if (!LDR.SAMPLE) { toast("サンプルは同梱されていません"); return; }
       S.actions.loadText(LDR.SAMPLE);
       $("dataDlg").close();
       toast("サンプルを読み込みました");

@@ -1,23 +1,25 @@
 # お題（cslib の Commitment / SecretSharing）の解析結果を表示するビューアを GitHub Pages に配置する。
 #
-# 手元で検証してきた三つのコマンドをそのまま回す（新しい段取りは持ち込まない）:
-#   make all TARGET=Debug/Examples                                   … フィクスチャの解析
-#   node Graph/make_sample.js                                        … ビューアの代替データ js/sample.js
+# 手元で使ってきた一本のコマンドをそのまま回す（新しい段取りは持ち込まない）:
 #   make all TARGET=Debug/Examples MODULES="Cslib.Crypto.Protocols.Commitment Cslib.Crypto.Protocols.SecretSharing" ARGS="--import-all"
-# それぞれ init → report → check → web を含む（Commands/Scripts/l4sb.sh）。ldr_check と、最後の
-# ldr_render_check を通過した場合だけ Graph/Web を配置する（検査に落ちたレポートは公開しない）。
+# これ一本が init（衛星の生成・依存の解決）→ Mathlib のキャッシュ取得 → cslib の二モジュールだけの
+# lake build → 解析器のビルド → decl_report → ldr_check → web（Graph/report.jsonl・report.meta.json・
+# Web/js/default-report.js の生成）までを含む（Commands/Scripts/l4sb.sh）。フィクスチャ（Examples）の
+# ビルドや解析、js/sample.js の生成は配置物に関係ないので行わない。ldr_check に落ちたレポートは
+# make が非零で終わるので配置されない。
 #
 # CI 固有に足すもの:
 #   - elan / node / 空き容量の確保。
 #   - cslib にはビルド済み成果物の配信が無い（Mathlib の `lake exe cache` に相当するものは無く、
 #     Reservoir の表示も互換性だけ）。Mathlib は cache get で取り、cslib はここで一度ビルドして
-#     actions/cache に保存する。actions/cache はジョブ成功時しか保存しないので restore / save を分け、
-#     save は `if: always()` で失敗時も途中成果を残す（初回が落ちると毎回最初からになる。実測）。
-#   - 公開リポジトリの runner は 4 コア・7 GB。lake の並列数を 2 に抑える（L4SB_LAKE_JOBS）。
-#   - MODULES をジョブの環境変数に置かない。Makefile の `MODULES ?=` が拾い、フィクスチャの段まで
-#     cslib を解析しに行く（実測）。コマンド行でだけ渡す。
-#   - --fetch-cache を付ける。キャッシュの復元が古い manifest のもの（restore-keys）でも、Mathlib を
-#     ソースからビルドし始めない（取得済みなら差分だけで安価）。
+#     actions/cache に保存する。
+#   - キャッシュは run ごとの鍵で毎回保存し、復元は接頭辞で最新のものを取る。「同じ鍵なら保存を
+#     飛ばす」作りだと、初回が途中で落ちた時の部分保存（Mathlib だけ、cslib 未ビルド）が二度と
+#     更新されず、毎回 cslib を最初からビルドする（実測）。
+#   - ARGS に --fetch-cache を足す。復元したキャッシュが古い manifest のもの（restore-keys）でも、
+#     Mathlib をソースからビルドし始めない（取得済みなら「No files to download」で数秒）。
+#   - MODULES をジョブの環境変数に置かない（Makefile の `MODULES ?=` が拾う）。コマンド行でだけ渡す。
+#   - lake の並列数は指定しない（Lake 5.0.0 / v4.35.0 に並列数のオプションは無い。`-j` で止まった。実測）。
 name: pages
 
 on:
@@ -42,7 +44,6 @@ concurrency:
 
 env:
   TARGET: Debug/Examples
-  L4SB_LAKE_JOBS: "2"
 
 jobs:
   analyze:
@@ -55,8 +56,8 @@ jobs:
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
-          df -h / | tail -n 1
-          free -h | head -n 2
+          df -h /
+          free -h
           nproc
 
       - uses: actions/setup-node@v4
@@ -68,9 +69,10 @@ jobs:
           curl -sSfL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
-      # 鍵は対象の manifest と toolchain（hashFiles は step の中でしか使えない。ジョブの env に置いて
-      # 「Unrecognized function」で止まった。実測）。解析器のソースは鍵に入れない（衛星の stamp が
-      # ソースの変更を検出して再複写・再ビルドする）。保存は末尾の cache/save（失敗時も残す）
+      # 鍵は対象の manifest と toolchain の hash に run の番号を足したもの（毎回新しい鍵で保存する）。
+      # 復元は接頭辞: 同じ manifest の最新 → 別の manifest の最新（その場合は --fetch-cache が Mathlib を
+      # 取り直す）。hashFiles は step の中でしか使えない（ジョブの env に置いて止まった。実測）。
+      # 解析器のソースは鍵に入れない（衛星の stamp がソースの変更を検出して再複写・再ビルドする）
       - name: Restore Lean toolchain, packages and builds
         id: restore
         uses: actions/cache/restore@v4
@@ -79,8 +81,9 @@ jobs:
             ~/.elan
             ${{ env.TARGET }}/.lake
             ${{ env.TARGET }}/.l4sb
-          key: l4sb-v2-${{ hashFiles('Debug/Examples/lake-manifest.json', 'Debug/Examples/lean-toolchain') }}
+          key: l4sb-v2-${{ hashFiles('Debug/Examples/lake-manifest.json', 'Debug/Examples/lean-toolchain') }}-${{ github.run_id }}
           restore-keys: |
+            l4sb-v2-${{ hashFiles('Debug/Examples/lake-manifest.json', 'Debug/Examples/lean-toolchain') }}
             l4sb-v2-
 
       - name: Lean toolchain of the target
@@ -88,26 +91,13 @@ jobs:
           cd "$TARGET"
           lean --version
           lake --version
-          df -h / | tail -n 1
+          df -h /
 
-      # 1. フィクスチャの解析（init → 対象ビルド → 解析器ビルド → decl_report → check → web）
-      - name: make all TARGET=Debug/Examples
-        run: |
-          make all TARGET="$TARGET" ARGS="--fetch-cache"
-          df -h / | tail -n 1
-
-      # 2. ビューアの代替データ（生成物。Graph/.gitignore）
-      - name: node Graph/make_sample.js
-        run: node Graph/make_sample.js
-
-      # 3. お題の解析。埋め込み（Graph/Web/js/default-report.js）をこれで上書きする
-      - name: make all … MODULES="Cslib.Crypto.Protocols.Commitment Cslib.Crypto.Protocols.SecretSharing" ARGS="--import-all"
+      # 手元と同じ一本（cslib の二モジュールの解析。init → build → report → check → web）
+      - name: make all TARGET=Debug/Examples MODULES="Cslib.Crypto.Protocols.Commitment Cslib.Crypto.Protocols.SecretSharing" ARGS="--import-all"
         run: |
           make all TARGET="$TARGET" MODULES="Cslib.Crypto.Protocols.Commitment Cslib.Crypto.Protocols.SecretSharing" ARGS="--import-all --fetch-cache"
-          df -h / | tail -n 1
-
-      - name: Render smoke test (DOM stand-in)
-        run: node Graph/ldr_render_check.js Graph/report.jsonl
+          df -h /
 
       - name: Assemble site
         run: |
@@ -125,16 +115,16 @@ jobs:
           path: site
 
       # 失敗しても途中成果（toolchain・packages・Mathlib の oleans・cslib のビルド）を残す。
-      # 同じ鍵が既に在れば保存は飛ばされる
+      # 鍵は run ごとなので必ず新しく保存される（古いものは GitHub 側の上限で順に消える）
       - name: Save Lean toolchain, packages and builds
-        if: always() && steps.restore.outputs.cache-hit != 'true'
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: |
             ~/.elan
             ${{ env.TARGET }}/.lake
             ${{ env.TARGET }}/.l4sb
-          key: ${{ steps.restore.outputs.cache-primary-key }}
+          key: l4sb-v2-${{ hashFiles('Debug/Examples/lake-manifest.json', 'Debug/Examples/lean-toolchain') }}-${{ github.run_id }}
 
   deploy:
     needs: analyze
