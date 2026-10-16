@@ -55,12 +55,43 @@ S.actions.setPreviewFollow(false); render();
 ok(html("depBody").includes(cen) && html("depBody").includes("中心"), "中心固定なら中心を出す");
 S.actions.setPreviewFollow(true);
 
+// プレビューの履歴: 戻る／進むで見ている宣言が変わり、選択（グラフの経路）も追従する
+S.actions.select(other);
+const third = S.state.order.find((n) => n !== cen && n !== other && !S.state.nodes[n].originRel);
+S.actions.select(third);
+ok(S.state.previewHist.length >= 3 && S.state.previewHist[0] === cen && S.previewName() === third,
+   "履歴は既定中心から始まり、見た宣言が順に積まれる", S.state.previewHist.map((x) => x.split(".").slice(-1)[0]).join(" › "));
+S.actions.previewBack();
+ok(S.previewName() === other && S.state.selected === other && S.state.pathFrom === other, "‹ で前に見た宣言へ戻り、選択も追従する");
+S.actions.previewForward();
+ok(S.previewName() === third && S.state.selected === third, "› で進む");
+S.actions.preview(cen);
+ok(S.previewName() === cen && S.state.selected === cen && S.state.previewFollow, "チップを押すとその宣言を見て選択にする（固定中でも追従へ）");
+render();
+ok(html("depBody").includes("data-pback") && html("depBody").includes("data-pfwd") && /\d+\/\d+/.test(html("depBody")), "頭に ‹ › と位置が出る");
+
+// 原文・束縛の記法
+const withSrc = S.state.order.map((n) => S.state.nodes[n]).find((n) => n.source);
+if (withSrc) {
+  S.actions.select(withSrc.name); render();
+  ok(html("depBody").includes("原文") && html("depBody").includes(withSrc.source.split("\n")[0].trim().slice(0, 20).replace(/[&<>"]/g, "")), "原文はソースの行そのものを出す");
+} else console.log("  skip  原文（この形式のレポートには原文が無い）");
+const withInst = S.state.order.map((n) => S.state.nodes[n]).find((n) => (n.binders || []).some((b) => b.kind === "inst"));
+if (withInst) {
+  S.actions.select(withInst.name); render();
+  ok(!/_hyg|_@\./.test(html("depBody").split("導出図")[0]), "束縛に衛生名が出ない");
+  ok(html("depBody").includes("[</span>"), "インスタンス束縛は [C α] の記法");
+}
+S.actions.select(other);
+
 // 外部の宣言: docs は宣言ページへ直接、パッケージの札
 const ext = Object.values(S.state.nodes).find((n) => n.external && LDR.pkg.docsUrl(n, n.name) && !LDR.pkg.docsUrl(n, n.name).includes("search"));
 if (ext) {
   S.actions.select(ext.name); render();
   const b = html("depBody");
-  ok(b.includes(LDR.pkg.docsUrl(ext, ext.name).replace(/&/g, "&amp;")) && b.includes("📘 docs"), "外部の宣言の docs は宣言ページへ直接", LDR.pkg.docsUrl(ext, ext.name));
+  const pkgLabel = LDR.pkg.labelOf(LDR.pkg.packageOf(ext.module));
+  ok(b.includes(LDR.pkg.docsUrl(ext, ext.name).replace(/&/g, "&amp;")) && b.includes(`📘 ${pkgLabel} docs`),
+     "外部の宣言の docs は宣言ページへ直接、文言にパッケージ名", `${pkgLabel}: ${LDR.pkg.docsUrl(ext, ext.name)}`);
   ok(b.includes(LDR.pkg.labelOf(LDR.pkg.packageOf(ext.module))), "外部の宣言にパッケージの札が付く", LDR.pkg.packageOf(ext.module));
 } else console.log("  skip  外部の宣言の docs（文書を持つ外部の宣言が無い）");
 const tgtDocs = S.state.order.map((n) => S.state.nodes[n]).find((n) => LDR.pkg.docsUrl(n, n.name));

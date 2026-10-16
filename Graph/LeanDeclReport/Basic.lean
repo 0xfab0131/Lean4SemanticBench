@@ -308,7 +308,15 @@ def classifyArgs (e : Expr) (withShapes : Bool := true) : MetaM ArgClassificatio
       let isP ← try Meta.isProp ldecl.type catch _ => pure false
       if isP then nH := nH + 1; hyps := hyps.push ldecl.type
       let ty ← try pure (toString (← Meta.ppExpr ldecl.type)) catch _ => pure ""
-      binders := binders.push { name := ldecl.userName, kind, type := ty, prop := isP }
+      /- 束縛名は衛生化（macro scope）を剥がす。`[Field F]` のように名前を書かないインスタンス束縛は
+         elaborator が `inst✝` の衛生名を付け、生の `userName` は
+         `inst._@.Cslib….1395594095._hygCtx._hyg.4` になる（cslib で束縛 2731 件中 640 件を実測）。
+         pretty printer は `inst_1` と番号を振るが、それは表示上の便宜であって原文には無い名前。
+         衛生名の束縛は **無名**（空文字）として渡し、表示側が `[Field F]`・`(_ : T)`・`P →` と書く
+         （`→` で書かれた仮定も `a✝` の衛生名を持つ。`a` に剥がして出すと、書かれていない名前を
+         原文に加えることになる）。 -/
+      let name := if ldecl.userName.hasMacroScopes then Name.anonymous else ldecl.userName
+      binders := binders.push { name, kind, type := ty, prop := isP }
     let concl ← try pure (toString (← Meta.ppExpr body)) catch _ => pure ""
     let head := match body.getAppFn with
       | .const n _ => n
@@ -538,6 +546,60 @@ def declLine (n : Name) (origin : Name := Name.anonymous) : MetaM Nat := do
     | some r => return r.range.pos.line
     | none   => return 0
 
+/-! ## 原文（ソースの切り出し）
+
+整形済みの型（`typeString`）は Lean の **表示** であって原文ではない（∀ の連鎖・完全修飾名・`inst_1`）。
+読み手が確認したいのは書かれたとおりの宣言なので、宣言範囲（`findDeclarationRanges?`）の行を
+ソースファイルから切り出して添える。ファイルはモジュール名からソースの検索パスで解決する
+（`getSrcSearchPath` = `LEAN_SRC_PATH`（`lake env` が各パッケージのソースディレクトリを置く）＋
+実行ファイル基準の `src/lean`。実行ファイルは `.lake/build/bin` にあるので後者は当たらず、core の
+ソースは toolchain の `src/lean` を `findSysroot` から明示的に足す）。言語サーバの定義ジャンプと
+同じ機構。読めなければ空（黙って別物を出さない）。 -/
+
+/-- モジュール → ソースの行（読めなければ none）。解析全体で共有する。 -/
+initialize sourceLinesRef : IO.Ref (Std.HashMap Name (Option (Array String))) ← IO.mkRef {}
+initialize srcSearchPathRef : IO.Ref (Option SearchPath) ← IO.mkRef none
+
+def srcSearchPath : IO SearchPath := do
+  if let some sp ← srcSearchPathRef.get then return sp
+  let sp ← getSrcSearchPath
+  let sp ← try
+      let sys ← findSysroot
+      pure (sp ++ [sys / "src" / "lean" / "lake", sys / "src" / "lean"])
+    catch _ => pure sp
+  srcSearchPathRef.set (some sp)
+  return sp
+
+def sourceLinesOf (m : Name) : IO (Option (Array String)) := do
+  if let some v := (← sourceLinesRef.get)[m]? then return v
+  let v ← try
+      let sp ← srcSearchPath
+      match ← sp.findWithExt "lean" m with
+      | some p =>
+        if ← p.pathExists then
+          pure (some ((← IO.FS.readFile p).splitOn "\n").toArray)
+        else pure none
+      | none => pure none
+    catch _ => pure none
+  sourceLinesRef.modify (·.insert m v)
+  return v
+
+/-- 宣言 `n`（モジュール `m`）の原文と終了行。範囲は `findDeclarationRanges?`（1 始まりの行、両端含む）。
+    派生（`casesOn` 等）は core が親の範囲を返すので、親（帰納型）の原文になる。自前の範囲を持たない
+    派生（`ctorIdx` / `noConfusionType` / `mk.inj` / `mk.injEq` / `mk.sizeOf_spec`。フィクスチャで実測）は
+    `declLine` と同じく由来の範囲へ落とす（由来の原文＝その派生を生んだ定義）。
+    原文は範囲の行をそのまま全て出す。打ち切らない（切った原文は原文ではない）。 -/
+def sourceOf (n : Name) (m : Name) (origin : Name := Name.anonymous) : MetaM (String × Nat) := do
+  let r? ← match ← Lean.findDeclarationRanges? n with
+    | some r => pure (some r)
+    | none   => if origin.isAnonymous then pure none else Lean.findDeclarationRanges? origin
+  let some r := r? | return ("", 0)
+  let some lines ← sourceLinesOf m | return ("", r.range.endPos.line)
+  let a := r.range.pos.line
+  let b := min r.range.endPos.line lines.size
+  if a == 0 || a > lines.size || b < a then return ("", r.range.endPos.line)
+  return ("\n".intercalate (lines.extract (a - 1) b).toList, r.range.endPos.line)
+
 /-- 帰納型なら構成子、構造体ならフィールド。「この宣言が属する型」を辿る手掛かり。 -/
 def membersOf (env : Environment) (ci : ConstantInfo) : Array Name :=
   match ci with
@@ -608,6 +670,10 @@ structure DeclReport where
   reducibility : String
   /-- 宣言が書かれている行。0 は不明。 -/
   line        : Nat
+  /-- 宣言の終了行。0 は不明。 -/
+  lineEnd     : Nat
+  /-- 原文。宣言範囲の行をソースから切り出したもの（上限付き）。読めなければ空。 -/
+  source      : String
   /-- 宇宙変数の個数。 -/
   numUniverse : Nat
   /-- インスタンスとして登録されているか。 -/
@@ -640,7 +706,8 @@ instance : ToString DeclReport where
     s!"  typeDeps   := ({r.typeDeps.size} 件) {r.typeDeps.toList}\n" ++
     s!"  valueDeps  := ({r.valueDeps.size} 件) {r.valueDeps.toList}\n" ++
     s!"  depModules := {r.depModules.toList}\n" ++
-    s!"  line       := {r.line}  universe := {r.numUniverse}  instance := {r.isInstance}\n" ++
+    s!"  line       := {r.line}–{r.lineEnd}  universe := {r.numUniverse}  instance := {r.isInstance}\n" ++
+    s!"  source     := {if r.source.isEmpty then "(読めず)" else s!"{r.source.length} 文字"}\n" ++
     s!"  size       := 型 {r.typeSize} / 値 {r.valueSize}\n" ++
     s!"  reducible  := {r.reducibility}  hyps := {r.numHyp}  members := {r.members.toList}\n" ++
     s!"  shape      := {if r.shape.isEmpty then "(なし)" else r.shape}  rel := {r.shapeRel}  rel2 := {r.shapeRel2}  on := {r.shapeType}\n" ++
@@ -670,6 +737,8 @@ def buildReport (env : Environment) (ci : ConstantInfo)
     | none   => acc
   let orig ← try originOf name catch _ => pure {}
   let line ← try declLine name orig.origin catch _ => pure 0
+  let module := moduleOf env name
+  let (source, lineEnd) ← try sourceOf name module orig.origin catch _ => pure ("", 0)
   let isInst ← try Lean.Meta.isInstance name catch _ => pure false
   -- `ReducibilityStatus` の構成子は版により増える(〜v4.28: 3 つ / v4.29 で
   -- `implicitReducible` 追加(#12247)/ v4.33 で `instanceReducible` に分割
@@ -696,7 +765,7 @@ def buildReport (env : Environment) (ci : ConstantInfo)
   return {
     name
     kind        := kindString ci
-    module      := moduleOf env name
+    module
     isProp
     numExplicit := cls.numExplicit
     numImplicit := cls.numImplicit
@@ -720,6 +789,8 @@ def buildReport (env : Environment) (ci : ConstantInfo)
     shapeType   := cls.shapeType
     reducibility := red
     line
+    lineEnd
+    source
     numUniverse := ci.levelParams.length
     isInstance  := isInst
     typeSize    := exprSize type

@@ -44,6 +44,38 @@
   /* 左の一覧のガイド線（入れ子）。行ごとの部品として描く。色は行側の inline で上書きする */
   .gl { position: absolute; border: 0 solid #d6d3d1; pointer-events: none; box-sizing: border-box; }
   .dark .gl { border-color: #44403c; }
+  /* 右パネル（プレビュー）の部品。隙間・札の大きさ・区画の枠を一か所で決める。
+     Tailwind のクラスを行ごとに並べると、行ごとに隙間や大きさがずれる（実測）。 */
+  .pv { font-size: 11px; }
+  .pv .sec { border: 1px solid #e7e5e4; border-radius: 6px; background: #fafaf9; }
+  .dark .pv .sec { border-color: #44403c; background: #0c0a09; }
+  .pv .sec > summary { padding: 4px 8px; font-size: 10.5px; color: #57534e; cursor: pointer; user-select: none;
+                       display: flex; align-items: baseline; gap: 8px; }
+  .dark .pv .sec > summary { color: #d6d3d1; }
+  .pv .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 20px; }
+  .pv .lbl { font-size: 10px; color: #a8a29e; flex: none; white-space: nowrap; width: 34px; }
+  .pv .chip { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; line-height: 16px;
+              padding: 0 6px; border-radius: 4px; white-space: nowrap; }
+  .pv .lnk { font-size: 10.5px; color: #57534e; text-decoration: none; }
+  .pv .lnk:hover { text-decoration: underline; }
+  .dark .pv .lnk { color: #a8a29e; }
+  .pv .sig-sec { display: flex; gap: 8px; padding: 4px 6px 4px 8px; border-left: 3px solid #d6d3d1; }
+  .pv .sig-sec + .sig-sec { border-top: 1px solid #e7e5e4; }
+  .dark .pv .sig-sec + .sig-sec { border-top-color: #44403c; }
+  .pv .sig-sec .lbl { padding-top: 2px; }
+  .pv .sig-line { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+  .pv .fig-rule { display: flex; align-items: center; gap: 8px; margin: 6px 0 4px; }
+  .pv .fig-rule > i { flex: 1; height: 1px; background: #a8a29e; }
+  .pv .fig-rule > b { font: 10px ui-monospace, monospace; color: #57534e; max-width: 60%; overflow: hidden;
+                      text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+  .dark .pv .fig-rule > b { color: #a8a29e; }
+  .pv .prem { display: grid; grid-template-columns: 14px 1fr; column-gap: 4px; padding: 2px 0; }
+  .pv .prem .nm { display: flex; align-items: center; gap: 5px; min-width: 0; }
+  .pv .prem .cl { grid-column: 2; font: 10px ui-monospace, monospace; color: #78716c; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }
+  .pv .prem .nest { grid-column: 2; margin: 4px 0 6px; padding-left: 8px; border-left: 2px solid #e7e5e4; }
+  .pv code { font: 10.5px ui-monospace, monospace; background: #f5f5f4; padding: 0 3px; border-radius: 3px; }
+  .dark .pv code { background: #292524; }
   /* 集中表示では操作列を消さず、キャンバスの上に浮かせて残す。
      必要な操作まで消えてしまうと、集中どころか手が止まる。 */
   #toolRow.focus-min {
@@ -247,8 +279,9 @@
             色のレールは名前空間。上端に固定される見出しを押すとそこへ戻る。薄い字は名前空間、濃い字が宣言名。</div>
           <div><b>派生</b>: 由来（構造体・構成子・定義）から Lean が機械的に作る宣言（casesOn / mk.inj / sizeOf_spec / eq_1 …）。
             既定では由来の行とグラフの節点に畳み、辺には「単射性」等の経由の札を付ける。
-            グラフの札 <b>+k</b> は「この中心から見える派生の数」（0 なら薄い。開いても図は変わらず、一覧で見る）、
-            <b>−n</b> は開いている、<b>▾n</b> は固定で開いている（中心が派生、または経路表示の区間に派生があるとき。押しても閉じない）。
+            グラフの札 <b>◇k</b> は「この中心から見える派生の数」（0 なら薄い。開いても図は変わらず、一覧で見る）、
+            <b>◆n</b> は開いている、藍の <b>◆n</b> は固定で開いている（中心が派生、または経路表示の区間に派生があるとき。押しても閉じない）。
+            ノードの外の <b>+n</b> は別物で、深さの先に隠れている依存の数（押すと展開）。
             一覧の「派生を全て開く」は全ての由来を開く／畳む操作で、個別の開閉と同じ集合を動かす。</div>
           <div><b>断片</b>: 証明・本体から切り出された補助（_proof_1 / match_1）。由来に埋め戻し、節点には出さない。
             <b>骨組み</b>: 論理結合子（And.intro / Eq.mpr）。「表示 ▾」で通り抜けを切り替える。</div>
@@ -258,8 +291,10 @@
             <span style="color:#16A34A">cslib</span> <span style="color:#78716C">core</span> …）を示す。凡例はグラフ左上。
             「束ね」で「パッケージ」を選ぶと上の錐がパッケージごとの扇になる。右パネルの 📘 docs は公式ドキュメントの宣言ページへ直接飛ぶ。</div>
           <div><b>右パネル</b>: 主語は一つ（「追従」なら選択中の宣言、「中心固定」ならグラフの中心）。
-            依存・参照のタブもその宣言について出す。中央の見出しは常にグラフの中心。</div>
-          <div><kbd>/</kbd>検索 <kbd>t</kbd>型のみ <kbd>m</kbd>粒度 <kbd>v</kbd>下錐 <kbd>p</kbd>ピン <kbd>0</kbd>全体 <kbd>f</kbd>集中</div>
+            依存・参照のタブもその宣言について出す。中央の見出しは常にグラフの中心。
+            見た宣言の履歴は ‹ › と <kbd>[</kbd> <kbd>]</kbd> で戻る／進む。チップを押すとその宣言を見てグラフで選択する。
+            「原文」はソースの宣言範囲そのもの、「型（Lean の表示）」は Lean が整形した型。凡例（グラフ左上）は指すと展開。</div>
+          <div><kbd>/</kbd>検索 <kbd>t</kbd>型のみ <kbd>m</kbd>粒度 <kbd>v</kbd>下錐 <kbd>p</kbd>ピン <kbd>0</kbd>全体 <kbd>f</kbd>集中 <kbd>[</kbd><kbd>]</kbd>見た宣言の前後</div>
         </div>
       </details>
     </aside>

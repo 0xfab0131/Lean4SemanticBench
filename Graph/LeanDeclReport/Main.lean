@@ -67,6 +67,8 @@ def declReportToJsonLine (r : DeclReport) (scope : String := "target") : String 
     "\"kind\":"        ++ jsonStr r.kind,
     "\"module\":"      ++ jsonStr (toString r.module),
     "\"line\":"        ++ toString r.line,
+    "\"lineEnd\":"     ++ toString r.lineEnd,
+    "\"source\":"      ++ jsonStr r.source,
     "\"isProp\":"      ++ toString r.isProp,
     "\"isInstance\":"  ++ toString r.isInstance,
     "\"reducibility\":" ++ jsonStr r.reducibility,
@@ -324,6 +326,17 @@ unsafe def mainImpl (args : List String) : IO UInt32 := do
           queue := queue ++ nameArray (directDepsOfCore env n).all
         else
           external := external.insert n
+      /- 外部の派生・断片（`PMF.pure._proof_1` / `Exists.rec` 等）は、その由来（`PMF.pure` / `Exists`）も
+         一段だけ出す。由来がレポートに無いと、ビューアは由来に畳めず `_proof_1` が節点のまま図に残り、
+         極小元にも並ぶ（cslib で実測）。由来は手書きの宣言（π はレトラクション）なので、由来の由来は要らない。 -/
+      let mut originsOfExternal : NameSet := {}
+      for n in nameArray external do
+        let (o, _) ← (originOf n).toIO coreCtx coreState
+        let p := o.origin
+        unless p.isAnonymous do
+          if env.contains p && !inSet.contains p && !internal.contains p && !external.contains p then
+            originsOfExternal := originsOfExternal.insert p
+      external := external.union originsOfExternal
       let (intReports, intShapeless, intSkipped) ←
         collectAllReports env (nameArray internal) parsed.valueChars coreCtx coreState
       let (extReports, extShapeless, extSkipped) ←

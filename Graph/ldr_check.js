@@ -360,6 +360,19 @@ console.log("\n=== Lean 側から来た構造化データ ===");
                          : `位置なしの派生・断片 ${lineless.length} 件は許容`);
   ok(thm.every((n) => n.valueSize > 0), "全定理の証明項を辿れている",
      `辿れていない定理 ${thm.filter((n) => n.valueSize === 0).length} 件`);
+  /* 原文（ソースの切り出し）。欄が無いのは旧形式。欄があるのに対象の宣言で空なら、
+     ソースの検索パス（LEAN_SRC_PATH）が解析時に無かったか、範囲が取れていない。 */
+  const withSrc = rows.filter((n) => n.source).length;
+  if (withSrc) {
+    ok(withSrc === rows.length, "対象の全宣言に原文がある", `${withSrc} / ${rows.length}`);
+    const endOk = rows.filter((n) => n.source && n.lineEnd >= n.line).length;
+    ok(endOk === withSrc, "原文の終了行が開始行以上", `${endOk} / ${withSrc}`);
+    const ext = Object.values(S.state.nodes).filter((n) => n.external && n.module && !n.module.startsWith("("));
+    console.log(`  外部の宣言で原文があるもの ${ext.filter((n) => n.source).length} / ${ext.length}`);
+  } else skip("対象の全宣言に原文がある", "原文の欄が無い（旧形式）か、全て空");
+  const hygienic = rows.reduce((a, n) => a + (n.binders || []).filter((b) => /(^|\.)_@\.|_hyg/.test(b.name)).length, 0);
+  if (withSrc) ok(hygienic === 0, "束縛名に衛生名（inst._@…_hyg）が残っていない", `${hygienic} 件`);
+  else if (hygienic) console.log(`  衛生名の束縛 ${hygienic} 件（旧形式。表示側で無名として扱う）`);
   const axCarrier = rows.filter((n) => n.axioms.length > 0).length;
   console.log(`  公理に依存する宣言 ${axCarrier} 件（証明項を辿った上での結果）`);
   const shapes = {};

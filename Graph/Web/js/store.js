@@ -92,10 +92,13 @@
     openClusters: new Set(),
 
     /* 右パネルのプレビュー。中心に固定するか、選んだものを追うかを切り替える。
-       比較しながら読むときは追従、腰を据えて読むときは固定が要る。 */
+       比較しながら読むときは追従、腰を据えて読むときは固定が要る。
+       履歴は見た順の列と現在位置で持ち、戻る／進むができる（以前は直近を前に積むだけで、
+       押しても元の位置に戻れず、グラフとも連動しなかった）。 */
     previewFollow: true,
     previewName: null,
-    previewHist: [],        // 直近に見た宣言。最大 10 件
+    previewHist: [],        // 見た順（古い → 新しい）。最大 30 件
+    previewPos: -1,         // previewHist の現在位置
 
     view: { tx: 0, ty: 0, k: null },  // k=null なら自動フィット
   };
@@ -698,6 +701,32 @@
     return { ok: !msg, msg: msg || "ピンの状態に戻しました" };
   }
 
+  /* ---------- プレビューの履歴 ----------
+     見た宣言を順に積む。現在位置より先（戻った後に捨てた枝）は、新しい宣言を見た時点で切る
+     （ブラウザの履歴と同じ）。同じ宣言は列に一つだけ置く。 */
+  function previewPush(n) {
+    if (!n) return;
+    const h = state.previewHist;
+    if (h[state.previewPos] === n) { state.previewName = n; return; }
+    const next = h.slice(0, state.previewPos + 1).filter((x) => x !== n);
+    next.push(n);
+    state.previewHist = next.slice(-30);
+    state.previewPos = state.previewHist.length - 1;
+    state.previewName = n;
+  }
+  /* 履歴の位置を動かしたときの共通処理。見ている宣言を選択にもして、グラフで経路を光らせる。
+     固定中でも履歴を動かしたなら見たいのはその宣言なので、追従に切り替える。 */
+  function previewGoto(pos) {
+    const n = state.previewHist[pos];
+    if (!n) return;
+    state.previewPos = pos;
+    state.previewName = n;
+    state.previewFollow = true;
+    state.selected = n;
+    state.pathFrom = n;
+    refresh();
+  }
+
   /* ---------- 操作 ---------- */
   const actions = {
     loadText(text, opts) {
@@ -707,9 +736,11 @@
       state.hist = { nodes: {}, order: [], curId: null, seq: 0 };
       state.expanded = new Set(); state.traceTarget = null; state.selected = null;
       state.pathFrom = null; state.treeClosed = new Set();
-      state.previewName = null; state.previewHist = [];
+      state.previewName = null; state.previewHist = []; state.previewPos = -1;
       state.view = { tx: 0, ty: 0, k: null };
       refresh(true);
+      // 履歴は既定中心から始める（最初に見ているのはそれ。戻る先として残す）
+      if (derived.center && state.nodes[derived.center]) { previewPush(derived.center); emit(); }
       if (!opts || !opts.silent) LDR.onDataLoaded && LDR.onDataLoaded(text);
     },
     navigate(n) {
@@ -717,8 +748,7 @@
       histPush(n);
       state.expanded = new Set(); state.traceTarget = null;
       state.selected = n;
-      state.previewName = n;
-      state.previewHist = [n, ...state.previewHist.filter((x) => x !== n)].slice(0, 10);
+      previewPush(n);
       state.view = { tx: 0, ty: 0, k: null };
       refresh();
     },
@@ -759,23 +789,22 @@
       state.selected = n;
       state.pathFrom = n;              // 中心までの流れを浮かび上がらせる
       // 追従なら、覗いた先をそのままプレビューに出す。移動はしない。
-      if (state.previewFollow && n) {
-        state.previewName = n;
-        state.previewHist = [n, ...state.previewHist.filter((x) => x !== n)].slice(0, 10);
-      }
+      if (state.previewFollow && n) previewPush(n);
       refresh();
     },
-    /** プレビューの対象を差し替え、直近 10 件を控える。 */
+    /** 履歴のチップを押す。その宣言を見て、選択にもする（グラフで経路が光る）。 */
     preview(n) {
       if (!n) return;
-      state.previewName = n;
-      state.previewHist = [n, ...state.previewHist.filter((x) => x !== n)].slice(0, 10);
-      emit();
+      const i = state.previewHist.indexOf(n);
+      if (i >= 0) previewGoto(i);
+      else { previewPush(n); previewGoto(state.previewPos); }
     },
+    previewBack() { if (state.previewPos > 0) previewGoto(state.previewPos - 1); },
+    previewForward() { if (state.previewPos < state.previewHist.length - 1) previewGoto(state.previewPos + 1); },
     setPreviewFollow(v) {
       state.previewFollow = !!v;
       if (!state.previewFollow) state.previewName = centerName();
-      else if (state.selected) state.previewName = state.selected;
+      else if (state.selected) previewPush(state.selected);
       emit();
     },
     setGroupBy(g) { state.groupBy = g; refresh(true); },

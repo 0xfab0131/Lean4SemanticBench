@@ -65,6 +65,7 @@
 
   let p, host, anim = {}, fitK = 1, hitBoxes = [], lastClick = 0, lastClickName = null;
   let drag = null;
+  let legendRect = { x: 0, y: 0, w: 0, h: 0 };   // 凡例の矩形（画面座標）。指しているときだけ全体を出す
 
   const isDark = () => document.documentElement.classList.contains("dark");
   const pal = () => (isDark() ? PAL.dark : PAL.light);
@@ -364,7 +365,7 @@
         hitBoxes.push({ kind: "node", name: n, x: a.x - w / 2, y: a.y - h / 2, w, h });
         /* 派生の札はノードの矩形の内側にあるので、当たり判定はノードの後に積む
            （後から積んだものが優先。先に積むと押してもノードの選択になる。実障害）。 */
-        if (fc) drawClusterBadge(pp, c, dv, n, fc, a.x + w / 2 - 25, a.y - 8, stl.bd, k, (dim ? c.dim : 1) * a.o);
+        if (fc) drawClusterBadge(pp, c, dv, n, fc, a.x + w / 2 - 27, a.y - 8, stl.bd, k, (dim ? c.dim : 1) * a.o);
         pp.drawingContext.globalAlpha = 1;
       }
 
@@ -379,7 +380,7 @@
       pp.textAlign(pp.CENTER, pp.CENTER);
       pp.text(fit(pp, (dv.labels && dv.labels[cen]) || cen, cw - 18 - (cfc ? 26 : 0)), cfc ? -13 : 0, 0.5);
       hitBoxes.push({ kind: "node", name: cen, x: -cw / 2, y: -ch / 2, w: cw, h: ch });
-      if (cfc) drawClusterBadge(pp, c, dv, cen, cfc, cw / 2 - 27, -8, c.centerRing, k, 1);
+      if (cfc) drawClusterBadge(pp, c, dv, cen, cfc, cw / 2 - 29, -8, c.centerRing, k, 1);
 
       pp.pop();
 
@@ -395,23 +396,24 @@
       if (animDelta < 0.5 && !drag) pp.noLoop();
     }
 
-    /* 派生の札。
-         +k   畳んでいる。k はこの中心から見える派生の数（開けば現れる）。0 なら薄く描く
+    /* 派生の札。記号は展開バッジ（ノードの外の `+n`: 深さの先に隠れている依存の数）と
+       取り違えないよう、菱形にする（同じ `+n` が二種あると区別できない。実測）。
+         ◇k   畳んでいる。k はこの中心から見える派生の数（開けば現れる）。0 なら薄く描く
               （開いても図は変わらない。一覧では由来の下に全て出る）。
-         −n   開いている。n は由来の派生の総数。
-         ▾n   強制的に開いている（中心が派生／経路表示の区間に派生）。押しても閉じない。
+         ◆n   開いている。n は由来の派生の総数。
+         ◆n（藍） 強制的に開いている（中心が派生／経路表示の区間に派生）。押しても閉じない。
        押すと開閉（一覧の小枝と同じ状態）。 */
     function drawClusterBadge(pp, c, dv, name, fc, x, y, bd, k, alpha) {
       const open = S.isClusterOpen(name), forced = S.isClusterForced(name);
       const reach = dv.facetReach ? (dv.facetReach[name] || 0) : fc;
-      const bw = 22, bh = 16;
+      const bw = 24, bh = 16;
       const faint = !open && reach === 0;
       pp.drawingContext.globalAlpha = alpha * (faint ? 0.45 : 1);
       pp.fill(c.badgeBg); pp.stroke(forced ? c.center : bd); pp.strokeWeight((forced ? 1.4 : 1) / k);
       pp.rect(x, y, bw, bh, 8);
       pp.noStroke(); pp.fill(forced ? c.center : c.badgeTx); pp.textSize(10);
       pp.textAlign(pp.CENTER, pp.CENTER);
-      pp.text(forced ? "▾" + fc : open ? "−" + fc : "+" + reach, x + bw / 2, y + bh / 2 + 0.5);
+      pp.text((open ? "◆" : "◇") + (open ? fc : reach), x + bw / 2, y + bh / 2 + 0.5);
       pp.drawingContext.globalAlpha = alpha;
       hitBoxes.push({ kind: "cluster", name, x, y, w: bw, h: bh });
     }
@@ -485,8 +487,8 @@
       if (fc || pc) {
         const reach = dv.facetReach ? (dv.facetReach[n] || 0) : fc;
         const how = S.isClusterForced(n) ? "固定で開いている（中心または経路の由来）"
-                  : S.isClusterOpen(n) ? "開いている"
-                  : reach ? `畳んでいる。この中心から見えるのは ${reach} 件、+${reach} で開く`
+                  : S.isClusterOpen(n) ? "開いている。◆ で畳む"
+                  : reach ? `畳んでいる。この中心から見えるのは ${reach} 件、◇${reach} で開く`
                   : "畳んでいる。この中心の依存・参照の経路上には無い（一覧の由来の行で見る）";
         lines.push({ t: (fc ? `派生 ${fc}（${how}）` : "") + (fc && pc ? "  " : "") + (pc ? `断片 ${pc}` : ""), s: 11, col: c.muted });
       }
@@ -552,12 +554,16 @@
         }
       }
 
-      /* 幅が足りないところに 268 px の凡例を置くと、グラフに残る面積が無くなる。
-         狭いときは線見本だけの一列に畳む。 */
-      if (W < 760) {
+      /* 凡例は既定では一行に畳み、指したときだけ全体を出す。開いたままの 268px × 150px の箱は
+         左上の節点を隠していた（実測）。狭い画面でも同じ一行で足りる。 */
+      const pkgRows = [...pkgs.entries()].sort((a, b) => b[1] - a[1]);
+      const compactW = 4 + rows.length * 30 + 150 + (pkgRows.length ? 14 * pkgRows.length + 70 : 0);
+      const hovering = pp.mouseX >= legendRect.x && pp.mouseX <= legendRect.x + legendRect.w
+                    && pp.mouseY >= legendRect.y && pp.mouseY <= legendRect.y + legendRect.h;
+      if (W < 760 || !hovering) {
         const y0 = 14, x0 = 12;
         pp.noStroke(); pp.fill(c.panel);
-        pp.rect(x0, y0 - 4, 4 + rows.length * 30, 22, 8);
+        pp.rect(x0, y0 - 4, compactW, 22, 8);
         rows.forEach((r, i) => {
           const xx = x0 + 8 + i * 30;
           pp.drawingContext.globalAlpha = r.on ? 1 : 0.28;
@@ -569,14 +575,28 @@
         });
         pp.noStroke(); pp.fill(c.muted); pp.textSize(9.5);
         pp.textAlign(pp.LEFT, pp.CENTER);
-        pp.text("型 / 値 / 主張 / 証明", x0 + 12 + rows.length * 30, y0 + 7);
+        let tx = x0 + 12 + rows.length * 30;
+        pp.text("型 / 値 / 主張 / 証明", tx, y0 + 7);
+        tx += 108;
+        if (pkgRows.length) {
+          pp.text("縁:", tx, y0 + 7); tx += 20;
+          for (const [p] of pkgRows) {
+            pp.noFill(); pp.stroke(LDR.pkg.colorOf(p)); pp.strokeWeight(1.6);
+            pp.rect(tx, y0 + 2, 10, 10, 3);
+            tx += 14;
+          }
+          pp.noStroke(); pp.fill(c.muted);
+          pp.text("パッケージ", tx + 4, y0 + 7); tx += 50;
+        }
+        pp.fill(c.muted); pp.text("▸ 指すと展開", tx + 6, y0 + 7);
+        legendRect = { x: x0, y: y0 - 4, w: compactW, h: 22 };
         return;
       }
 
       const padX = 11, padY = 9, lh = 19, sample = 34, boxW = 268;
-      const pkgRows = [...pkgs.entries()].sort((a, b) => b[1] - a[1]);
       const boxH = padY * 2 + lh * rows.length + 20 + (pkgRows.length ? 16 + 17 * Math.ceil(pkgRows.length / 2) : 0);
       const x = 12, y = 12;
+      legendRect = { x, y, w: boxW, h: boxH };
 
       pp.noStroke(); pp.fill(c.panel);
       pp.rect(x, y, boxW, boxH, 10);

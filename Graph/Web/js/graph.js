@@ -52,6 +52,9 @@
           kind: o.kind ?? "unknown",
           module: o.module ?? "(unknown)",
           line: o.line ?? 0,
+          lineEnd: o.lineEnd ?? 0,
+          // 原文（宣言範囲の行をソースから切り出したもの）。無ければ古い形式か、ソースが読めなかった
+          source: o.source ?? "",
           isProp: !!o.isProp,
           isInstance: !!o.isInstance,
           reducibility: o.reducibility ?? "",
@@ -109,7 +112,7 @@
       for (const dep of [...info.typeDeps, ...info.valueDeps]) {
         if (!nodes[dep]) {
           nodes[dep] = {
-            name: dep, kind: "external", module: "(範囲外)", line: 0,
+            name: dep, kind: "external", module: "(範囲外)", line: 0, lineEnd: 0, source: "",
             isProp: false, isInstance: false, reducibility: "",
             usesSorry: false, axioms: [], typeDeps: [], valueDeps: [],
             depModules: null, members: [], typeString: "", docString: "",

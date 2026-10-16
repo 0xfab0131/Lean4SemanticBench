@@ -32,8 +32,11 @@
     const t = e.target.closest(
       "[data-nav],[data-sel],[data-trace],[data-tab],[data-kind],[data-edge],[data-gran]," +
       "[data-ref],[data-list],[data-filter],[data-tree],[data-hist],[data-pin],[data-unpin]," +
-      "[data-group],[data-density],[data-preview],[data-follow],[data-deriv],[data-cluster]");
+      "[data-group],[data-density],[data-preview],[data-follow],[data-deriv],[data-cluster]," +
+      "[data-pback],[data-pfwd]");
     if (!t) return;
+    if (t.dataset.pback !== undefined) { S.actions.previewBack(); return; }
+    if (t.dataset.pfwd !== undefined) { S.actions.previewForward(); return; }
     if (t.dataset.cluster !== undefined) {
       const r = S.actions.toggleCluster(t.dataset.cluster);
       if (r && !r.ok && r.msg) toast(r.msg);      // 固定で開いている由来は閉じない。理由を伝える
@@ -89,6 +92,9 @@
     if (e.key === "+" || e.key === "=") { C.zoomIn(); return; }
     if (e.key === "-") { C.zoomOut(); return; }
     if (e.key === "Escape") { S.actions.setTrace(null); S.actions.clearPath(); return; }
+    // プレビューの履歴（見た宣言の列）を戻る／進む。中心の履歴（Ctrl+Z / Y）とは別
+    if (e.key === "[") { S.actions.previewBack(); return; }
+    if (e.key === "]") { S.actions.previewForward(); return; }
     if (k === "f") { toggleFocus(); return; }
     if (k === "t") { S.actions.setEdgeMode(S.state.edgeMode === "all" ? "type" : "all"); return; }
     if (k === "m") { S.actions.setGranularity(S.state.granularity === "decl" ? "module" : "decl"); return; }
