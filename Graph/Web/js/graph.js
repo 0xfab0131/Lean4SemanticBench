@@ -124,6 +124,7 @@
             numExplicit: 0, numImplicit: 0, numInst: 0, numHyp: 0, numUniverse: 0,
             typeSize: 0, valueSize: 0, external: true, internal: false,
             origin: "", originKind: "", originRel: "",
+            stub: true,   // 依存が分からない（レポートの範囲外）。極小元ではなく境界として扱う
           };
           stubs.push(dep);
         }
@@ -251,7 +252,7 @@
         seen.add(d);
         dep[n].push(d);
         ref[d].push(n);
-        edgeKind[n + " " + d] = kind;
+        edgeKind[n + " " + d] = kind;
       };
       for (const d of info.typeDeps) push(d, "type");
       if (edgeMode !== "type") for (const d of info.valueDeps) push(d, "value");
@@ -606,14 +607,16 @@
   }
 
   /* ---------- 極小元とフロンティア ----------
-     深さ上限で切られただけのノードを極小元と誤認しないよう分ける。 */
-  function minimalAndFrontier(closureNames, adj) {
+     深さ上限で切られただけのノードを極小元と誤認しないよう分ける。
+     isFrontier(n) が真の節点（レポートの範囲外のスタブ。依存は分からないだけで無いのではない）も
+     極小元ではなく境界に入れる（cslib で極小元 800 件のうち 740 件がスタブだった。実測）。 */
+  function minimalAndFrontier(closureNames, adj, isFrontier) {
     const set = new Set(closureNames);
     const trueMinimal = [], frontier = [];
     for (const n of closureNames) {
       const deps = adj[n] || [];
       if (deps.some((d) => set.has(d))) continue;
-      (deps.length === 0 ? trueMinimal : frontier).push(n);
+      (deps.length === 0 && !(isFrontier && isFrontier(n)) ? trueMinimal : frontier).push(n);
     }
     return { trueMinimal: trueMinimal.sort(), frontier: frontier.sort() };
   }

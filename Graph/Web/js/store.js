@@ -450,6 +450,7 @@
     const view = ix.view;
     const idx = state.granularity === "module" ? ix.mod : view.idx;
     derived.declIdx = ix.decl; derived.modIdx = ix.mod; derived.idx = idx; derived.viewIdx = view.idx;
+    derived.inlinedIdx = ix.inlined;    // 断片を由来に埋め戻した索引（極小元・レポートが使う）
     derived.via = view.via; derived.facetCount = view.facetCount; derived.partCount = view.partCount;
     derived.forcedOpen = ix.forced;
 
@@ -473,7 +474,8 @@
        一部であって原子ではないので極小元に並べない。派生の畳み込みの影響は受けない。 */
     const rawDep = state.granularity === "module" ? idx.dep : ix.inlined.dep;
     const fullDep = G.reachable(c, rawDep, 64);
-    const mf = G.minimalAndFrontier(Object.keys(fullDep), rawDep);
+    // 範囲外のスタブは境界（依存が分からないだけ）。極小元に数えない
+    const mf = G.minimalAndFrontier(Object.keys(fullDep), rawDep, (n) => !!(nodes[n] && nodes[n].stub));
     derived.trueMinimal = mf.trueMinimal;
     derived.minimalSet = new Set(mf.trueMinimal);   // 描画は毎フレーム引くので集合で持つ
     derived.frontier = mf.frontier;

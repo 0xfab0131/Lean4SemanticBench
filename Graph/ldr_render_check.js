@@ -24,7 +24,7 @@ global.document = {
   createElement: (t) => el("new:" + t),
 };
 global.requestAnimationFrame = (f) => { f(); return 0; };
-for (const f of ["graph.js", "sig.js", "pkg.js", "roles.js", "store.js", "canvas.js", "panels.js"]) require(path.join(JS, f));
+for (const f of ["graph.js", "sig.js", "pkg.js", "roles.js", "store.js", "canvas.js", "panels.js", "report.js"]) require(path.join(JS, f));
 const LDR = global.window.LDR, S = LDR.store, P = LDR.panels;
 
 const src = process.argv[2] ? path.resolve(process.cwd(), process.argv[2]) : path.join(__dirname, "report.jsonl");
@@ -128,5 +128,76 @@ S.actions.setTrace("__no_such__");
 // 束ね: パッケージ
 S.actions.setGroupBy("package"); render();
 ok(Object.keys(S.derived.posAll).length > 1, "束ね=パッケージでも配置できる", Object.keys(S.derived.posAll).length + " 節点");
+
+// レポート（Markdown）。中心・選択・極小元の三種が組み立ち、章が揃う
+{
+  const R = LDR.report;
+  S.actions.navigate(cen);
+  const rc = R.build("center", { sections: R.ALL, depth: 2 });
+  const isPropCen = !!S.state.nodes[cen].isProp;
+  ok(rc.ok && rc.text.startsWith("# ") && [isPropCen ? "## 主張" : "## 定義", "## 型依存", "## 値依存", "## 公理の由来", isPropCen ? "## 導出図" : "## 構成図", "## 極小元", "## 主張で参照", "## 計量", "## 来歴"].every((h) => rc.text.includes(h)),
+     "中心のレポートに全ての章がある（命題なら導出図、定義なら構成図）", `${rc.text.split("\n").length} 行`);
+  ok(!rc.text.includes("## 経路") && !rc.text.includes("## 注記"), "中心のレポートに経路の章は無く、注記は選ばない限り入らない");
+  const rn = R.build("center", { sections: ["claim", "notes"], fullNames: false });
+  ok(rn.text.includes("## 注記") && !rn.text.includes("## 型依存"), "注記は選んだときだけ末尾に入る");
+  const cenNd = S.state.nodes[cen];
+  if (cenNd.axioms.length) {
+    ok(rc.text.includes(`### \`${cenNd.axioms[0]}\``) && /主張（型）の依存|証明（値）にだけ入っている/.test(rc.text), "公理ごとに主張か証明かの判定が出る", cenNd.axioms.join(", "));
+  }
+  const srcOk = !S.state.nodes[cen].source || rc.text.includes("```lean");
+  ok(srcOk, "原文があれば lean ブロックで入る");
+  /* Mermaid の図。既定で付き、記法は一度だけ、辺の端点は宣言済みの節点、ラベルの中に生の " < > # が無い
+     （Mermaid の構文に反する図は描画で落ちるので、文章版と同じ事実を持たない）。外せば一つも出ない。 */
+  const blocks = (t) => { const r = []; const re = /```mermaid\n([\s\S]*?)```/g; let m; while ((m = re.exec(t))) r.push(m[1]); return r; };
+  const checkBlocks = (t) => {
+    const bs = blocks(t); const bad = [];
+    for (const b of bs) {
+      const lines = b.split("\n");
+      if (lines[0] !== "flowchart BT") bad.push("向き: " + lines[0]);
+      const declared = new Set();
+      for (const l of lines) { const m = l.match(/^\s*(n\d+)(\{\{|\[\[|\[\/|\(\[|\[)"/); if (m) declared.add(m[1]); }
+      for (const l of lines) {
+        const m = l.match(/^\s*(n\d+) (?:-->|-\.->|==>|-- "[^"]*" -->|-\. "[^"]*" \.->|== "[^"]*" ==>) (n\d+)$/);
+        if (m && !(declared.has(m[1]) && declared.has(m[2]))) bad.push("未宣言の端点: " + l.trim());
+      }
+      for (const q of b.matchAll(/"([^"]*)"/g)) if (/[<>]|#(?!(35|quot|lt|gt);)/.test(q[1])) bad.push("生の記号: " + q[1]);
+    }
+    return { n: bs.length, bad };
+  };
+  const mb = checkBlocks(rc.text);
+  ok(mb.n >= 2 && !mb.bad.length, "中心のレポートの付録に Mermaid の図（公理の流入・境界…）が付き、構文の約束を守る", `${mb.n} 図${mb.bad.length ? " / " + mb.bad.slice(0, 3).join("; ") : ""}`);
+  const iApp = rc.text.indexOf("## 付録: 図");
+  ok((rc.text.match(/## 付録: 図/g) || []).length === 1 && iApp > rc.text.indexOf("## 来歴") && rc.text.indexOf("### 記法") > iApp && rc.text.indexOf("### 記法") < rc.text.indexOf("```mermaid"),
+     "図は本文に挟まず末尾の付録に集め、記法は付録の頭に一度だけ");
+  ok(!rc.text.slice(0, iApp).includes("```mermaid"), "本文（付録より前）に Mermaid は一つも無い");
+  if (cenNd.axioms.length) ok(rc.text.includes("公理の流入（") && (rc.text.match(/### 図 \d+: 公理の流入/g) || []).length === 1 && /\[[PCQ!S ]+\]"/.test(rc.text),
+     "公理の流入は公理ごとに分けず一つの図で、節点の札に持つ公理を書く", cenNd.axioms.map((a) => a.split(".").pop()).join(" "));
+  const rcNo = R.build("center", { sections: R.ALL.filter((s) => s !== "figures"), depth: 2 });
+  ok(!rcNo.text.includes("```mermaid") && !rcNo.text.includes("付録: 図"), "章「付録: 図」を外せば Mermaid も記法も出ない");
+  if (process.env.LDR_DUMP) { fs.mkdirSync(process.env.LDR_DUMP, { recursive: true }); fs.writeFileSync(path.join(process.env.LDR_DUMP, "center.md"), rc.text); }
+  const rs0 = R.build("selected", { sections: R.ALL, depth: 1 });
+  ok(!rs0.ok && !!rs0.msg, "選択が無ければ理由を返す", rs0.msg);
+  const dep1 = S.derived.declIdx.dep[cen][0];
+  S.actions.select(dep1);
+  const rs = R.build("selected", { sections: ["claim", "path", "type", "figures"], depth: 1 });
+  ok(rs.ok && rs.text.includes("## 経路") && rs.text.includes("一本の道筋") && rs.text.includes("## 型依存") && !rs.text.includes("## 値依存"),
+     "選択のレポートに経路（区間・一本の道筋）が入り、選んだ章だけが出る", LDR.sig.shortName(dep1));
+  const mp = checkBlocks(rs.text);
+  ok(mp.n === 1 && !mp.bad.length && ((rs.text.includes("subgraph") && rs.text.includes("Hasse 図")) || rs.text.includes("最短の道筋だけ")) && rs.text.includes("==>"),
+     "経路の図は層の囲みの Hasse 図（または大きければ道筋だけ）で、最短の道筋は太線", mp.bad.slice(0, 3).join("; "));
+  if (process.env.LDR_DUMP) fs.writeFileSync(path.join(process.env.LDR_DUMP, "selected.md"), rs.text);
+  const tm = S.derived.trueMinimal[0];
+  const rm0 = R.build("minimal", { sections: R.ALL });
+  ok(!rm0.ok, "極小元が選ばれていなければ理由を返す");
+  if (tm) {
+    S.actions.setTrace(tm);
+    const rm = R.build("minimal", { sections: ["claim", "path", "refs", "figures"], depth: 1 });
+    ok(rm.ok && rm.text.includes("## 経路") && rm.text.includes("## 主張で参照"), "極小元のレポートに経路と参照が入る", LDR.sig.shortName(tm));
+    const mm = checkBlocks(rm.text);
+    ok(mm.n === 1 && !mm.bad.length, "極小元のレポートの経路にも図が付く", mm.bad.slice(0, 3).join("; "));
+    if (process.env.LDR_DUMP) fs.writeFileSync(path.join(process.env.LDR_DUMP, "minimal.md"), rm.text);
+    S.actions.setTrace(tm);
+  }
+}
 console.log(fail ? `${fail} 件が失敗` : "全て通過");
 process.exit(fail ? 1 : 0);

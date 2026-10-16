@@ -293,22 +293,34 @@
     document.querySelectorAll("[data-resize]").forEach(setupResizer);
     applyResponsive();
     window.addEventListener("resize", applyResponsive, { passive: true });
-    /* 「表示」ポップオーバー。fixed で出すので、開くたびに summary の位置へ置く。
-       絶対配置のままだと、祖先の overflow やスタッキング文脈で切り取られる。 */
-    const dv = $("dView");
-    const placeViewPanel = () => {
-      if (!dv.open) return;
-      const sum = dv.querySelector("summary").getBoundingClientRect();
-      const panel = $("dViewPanel");
+    /* 浮遊パネル（「表示」と、上部バーの 履歴・ピン・レポート・凡例）。fixed で出すので、開くたびに
+       summary の位置へ置く。絶対配置のままだと、祖先の overflow やスタッキング文脈で切り取られる。
+       一つ開けば他は閉じ、外を押せば閉じる。 */
+    const pops = [...document.querySelectorAll("details.pop"), $("dView")];
+    const placePanel = (d) => {
+      if (!d.open) return;
+      const sum = d.querySelector("summary").getBoundingClientRect();
+      const panel = d.querySelector(".popPanel") || $("dViewPanel");
+      if (!panel) return;
       panel.style.top = Math.round(sum.bottom + 6) + "px";
       const w = panel.offsetWidth || 380;
       panel.style.left = Math.round(Math.max(8, Math.min(sum.left, window.innerWidth - w - 8))) + "px";
     };
-    dv.addEventListener("toggle", placeViewPanel);
-    window.addEventListener("resize", placeViewPanel, { passive: true });
+    for (const d of pops) {
+      d.addEventListener("toggle", () => {
+        if (d.open) { for (const o of pops) if (o !== d) o.open = false; if (d.id === "dReport") renderReportPanel(); }
+        placePanel(d);
+      });
+    }
+    window.addEventListener("resize", () => pops.forEach(placePanel), { passive: true });
     document.addEventListener("click", (e) => {
-      if (dv.open && !dv.contains(e.target)) dv.open = false;
+      for (const d of pops) if (d.open && !d.contains(e.target) && !e.target.closest("dialog")) d.open = false;
     }, true);
+    // 履歴・ピンの中身が組み直されたら位置を取り直す（高さが変わる）
+    S.subscribe(() => pops.forEach(placePanel));
+
+    /* ---------- レポート ---------- */
+    setupReport();
 
     $("search").addEventListener("input", (e) => S.actions.setQuery(e.target.value));
     $("depthRange").addEventListener("input", (e) => S.actions.setBaseDepth(+e.target.value));
@@ -414,6 +426,80 @@
     $("btnSide").addEventListener("click", () => toggleAside($("sidebar"), "left"));
     $("btnSideR").addEventListener("click", () => toggleAside($("sideR"), "right"));
     $("btnFocus").addEventListener("click", toggleFocus);
+  }
+
+  /* ---------- レポート（証明の構造を Markdown に） ----------
+     主語（中心／選択／極小元）・章・導出図の深さを選び、プレビューしてから写す／保存する。
+     生成は report.js（純粋関数）。ここは選択の保持と配線だけ。 */
+  const reportOpts = { kind: "center", sections: new Set(LDR.report ? LDR.report.ALL : []), depth: 2,
+                       style: Object.fromEntries((LDR.report ? LDR.report.STYLE : []).map((s) => [s.id, s.def])) };
+  function renderReportPanel() {
+    if (!LDR.report) return;
+    const st = S.state, dv = S.derived;
+    const short = (n) => (n ? LDR.sig.shortName(n) : "");
+    const subj = [
+      { k: "center", l: "中心", n: dv.center, t: "グラフの中心" },
+      { k: "selected", l: "選択", n: st.selected && st.selected !== dv.center ? st.selected : null, t: "グラフや一覧で押した宣言（中心と異なるもの）" },
+      { k: "minimal", l: "極小元", n: st.traceTarget, t: "経路表示の対象（極小元・公理のチップで選んだもの）" },
+    ];
+    $("reportSubject").innerHTML = `<span class="text-[11.5px] text-stone-500 mr-1">主語</span>` + subj.map((s) => `<button data-rsubj="${s.k}" ${s.n ? "" : "disabled"}
+        title="${s.t}${s.n ? "" : "（いまは無い）"}"
+        class="px-2 py-1 rounded-md text-[11.5px] border ${reportOpts.kind === s.k
+          ? "bg-stone-900 text-white border-stone-900 dark:bg-stone-100 dark:text-stone-900"
+          : s.n ? "bg-white text-stone-600 border-stone-300 hover:bg-stone-100 dark:bg-stone-900 dark:text-stone-300 dark:border-stone-600" : "text-stone-300 border-stone-200 dark:text-stone-600 dark:border-stone-700"}">
+        ${s.l}${s.n ? ` <span class="font-mono text-[10.5px] opacity-80">${short(s.n)}</span>` : ""}</button>`).join("");
+    $("reportSections").innerHTML = `<div class="text-[10.5px] text-stone-400">章</div>`
+      + LDR.report.SECTIONS.map((s) => `<label class="flex items-center gap-1.5 cursor-pointer ${s.id === "path" && reportOpts.kind === "center" ? "opacity-40" : ""}">
+        <input type="checkbox" data-rsec="${s.id}" ${reportOpts.sections.has(s.id) ? "checked" : ""} class="accent-indigo-600">${s.ja}${s.id === "path" && reportOpts.kind === "center" ? "（中心が主語のときは無し）" : ""}</label>`).join("")
+      + `<div class="text-[10.5px] text-stone-400 pt-1">書き方</div>`
+      + LDR.report.STYLE.map((s) => `<label class="flex items-center gap-1.5 cursor-pointer">
+        <input type="checkbox" data-rstyle="${s.id}" ${reportOpts.style[s.id] ? "checked" : ""} class="accent-indigo-600">${s.ja}</label>`).join("");
+    $("reportDepth").innerHTML = [1, 2, 3].map((d) => `<button data-rdepth="${d}"
+        class="px-2 py-0.5 text-[11px] rounded-md ${reportOpts.depth === d ? "bg-white dark:bg-stone-700 shadow-sm text-stone-900 dark:text-stone-100" : "text-stone-500 hover:text-stone-800 dark:hover:text-stone-200"}">${d}</button>`).join("");
+  }
+  function buildReport() {
+    if (!LDR.report) return { ok: false, msg: "レポートの部品が読み込まれていません" };
+    return LDR.report.build(reportOpts.kind, { sections: [...reportOpts.sections], depth: reportOpts.depth, ...reportOpts.style });
+  }
+  function setupReport() {
+    $("dReport").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-rsubj],[data-rdepth],[data-rsec],[data-rstyle]");
+      if (!b) return;
+      if (b.dataset.rsubj) { reportOpts.kind = b.dataset.rsubj; renderReportPanel(); }
+      else if (b.dataset.rdepth) { reportOpts.depth = +b.dataset.rdepth; renderReportPanel(); }
+      else if (b.dataset.rsec) { b.checked ? reportOpts.sections.add(b.dataset.rsec) : reportOpts.sections.delete(b.dataset.rsec); }
+      else if (b.dataset.rstyle) { reportOpts.style[b.dataset.rstyle] = b.checked; }
+    });
+    $("reportAll").addEventListener("click", () => { reportOpts.sections = new Set(LDR.report.ALL); renderReportPanel(); });
+    $("reportNone").addEventListener("click", () => { reportOpts.sections = new Set(["claim"]); renderReportPanel(); });
+    const fileName = (r) => `ldr-${LDR.sig.shortName(r.subject).replace(/[^\w.-]+/g, "_")}-${new Date().toISOString().slice(0, 10)}.md`;
+    $("reportPreview").addEventListener("click", () => {
+      const r = buildReport();
+      if (!r.ok) { toast(r.msg); return; }
+      $("reportText").value = r.text;
+      $("reportDlgInfo").textContent = `${LDR.sig.shortName(r.subject)} · ${r.text.split("\n").length} 行 · ${(r.text.length / 1024).toFixed(1)} KB`;
+      $("reportDlg").showModal();
+    });
+    $("reportCopy").addEventListener("click", async () => {
+      const r = buildReport();
+      if (!r.ok) { toast(r.msg); return; }
+      toast((await copyText(r.text)) ? `レポートをコピーしました（${r.text.split("\n").length} 行）` : "コピーできませんでした");
+    });
+    $("reportSave").addEventListener("click", () => {
+      const r = buildReport();
+      if (!r.ok) { toast(r.msg); return; }
+      download(fileName(r), r.text, "text/markdown");
+      toast("レポートを保存しました");
+    });
+    $("reportDlgCopy").addEventListener("click", async () => {
+      toast((await copyText($("reportText").value)) ? "レポートをコピーしました" : "コピーできませんでした");
+    });
+    $("reportDlgSave").addEventListener("click", () => {
+      const r = buildReport();
+      download(r.ok ? fileName(r) : "ldr-report.md", $("reportText").value, "text/markdown");
+      toast("レポートを保存しました");
+    });
+    $("reportDlgClose").addEventListener("click", () => $("reportDlg").close());
   }
 
   /* 幅に応じてパネルを自動で畳む。

@@ -220,6 +220,24 @@ for (const n of Object.keys(S.state.nodes)) {
   if (a !== (idx.refAll[n] || []).length) unionBad++;
 }
 ok(unionBad === 0, "refAll が二つの直和になっている", `ずれ ${unionBad} 件`);
+/* 依存側の辺の種。作る側（buildIndices）と引く側（錐の辺・経路・図）が同じ鍵 `u + " " + v` で
+   一致しなければ、全ての辺が既定の「型」に落ちて値依存が一本も描かれない（区切りに NUL が混入して
+   実際に起きていた。cslib の経路の辺が全て [型] と出て発覚）。種は typeDeps / valueDeps と一致する。 */
+let kindMissing = 0, kindWrong = 0, kindV = 0, kindT = 0;
+for (const n of Object.keys(S.state.nodes)) {
+  const nd = S.state.nodes[n];
+  for (const d of idx.dep[n] || []) {
+    const k = idx.edgeKind[n + " " + d];
+    if (k === undefined) { kindMissing++; continue; }
+    const expect = nd.typeDeps.includes(d) ? "type" : "value";
+    if (k !== expect) kindWrong++;
+    if (k === "value") kindV++; else kindT++;
+  }
+}
+console.log(`  dep の辺の種: 型 ${kindT} 本 / 値 ${kindV} 本`);
+ok(kindMissing === 0, "dep の全ての辺に種（型／値）が引ける", `引けない辺 ${kindMissing} 本`);
+ok(kindWrong === 0, "辺の種が typeDeps / valueDeps と一致する", `不一致 ${kindWrong} 本`);
+ok(kindV > 0 || Object.values(S.state.nodes).every((x) => !x.valueDeps.length), "値依存がある限り、値の辺が少なくとも一本引ける");
 
 /* 三つの錐が全て埋まる中心を選ぶ。極大元だと下側が空になり幾何の検査にならない。 */
 let hub = null, hubScore = -1;

@@ -41,6 +41,12 @@
   .resizer::after { content:""; position:absolute; inset:0 2px; background:transparent; }
   .resizer:hover::after, .resizer.on::after { background:#6366f1; }
   .noselect, .noselect * { user-select: none !important; }
+  /* 上部バーの浮遊パネル（履歴・ピン留め・レポート・凡例）。fixed で出し、位置は index.js が
+     開いたときに summary の座標から決める（祖先の overflow で切り取られないように） */
+  .popPanel { position: fixed; z-index: 50; padding: 12px; border-radius: 10px;
+              background: #fff; border: 1px solid #e7e5e4; box-shadow: 0 10px 30px rgba(0,0,0,.14);
+              display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 70px); overflow: auto; }
+  .dark .popPanel { background: #1c1917; border-color: #44403c; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
   /* 左の一覧のガイド線（入れ子）。行ごとの部品として描く。色は行側の inline で上書きする */
   .gl { position: absolute; border: 0 solid #d6d3d1; pointer-events: none; box-sizing: border-box; }
   .dark .gl { border-color: #44403c; }
@@ -140,18 +146,112 @@
 <div class="h-full flex flex-col">
 
   <!-- ============ 上部バー ============ -->
+  <!-- backdrop-blur はスタッキング文脈を作るので、中の浮遊パネル（履歴・ピン・レポート・凡例）が
+       右パネルの下に描かれて見切れる（実測）。上部バー自体を最前面に置く。 -->
   <header class="shrink-0 h-12 px-3 flex items-center gap-2 border-b border-stone-200 dark:border-stone-800
-                 bg-white/80 dark:bg-stone-900/80 backdrop-blur-sm">
+                 bg-white/80 dark:bg-stone-900/80 backdrop-blur-sm" style="position:relative;z-index:60">
     <button id="btnSide" class="shrink-0 w-9 h-9 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-500 text-[16px]" title="一覧の開閉">☰</button>
     <span class="shrink-0 text-[14px] font-medium tracking-tight hidden lg:inline"
           title="Lean4SemanticBench">L4SB</span>
     <div class="shrink-0 w-px h-5 bg-stone-200 dark:bg-stone-700 mx-1"></div>
     <!-- 長い宣言名がボタン列に食い込まないよう、ここだけが縮む -->
     <div id="crumb" class="flex-1 min-w-0 overflow-hidden px-1"></div>
-    <button id="btnPinAdd" class="shrink-0 px-3 h-9 rounded-md text-[13px] border border-stone-300 dark:border-stone-600
-            hover:bg-stone-100 dark:hover:bg-stone-800" title="いまの閲覧状態をピン留め (p)">📌 ピン</button>
+
+    <!-- 右パネルの下に畳んであった 履歴・ピン留め・凡例 と、新しい レポート は、上部バーの
+         浮遊パネル（details.pop）に置く。パネルの下は視線が届かず、本文の高さも奪っていた（指摘）。 -->
+    <details id="dReport" class="pop shrink-0">
+      <summary class="px-3 h-9 flex items-center rounded-md text-[13px] border border-stone-300 dark:border-stone-600
+                      hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer select-none list-none" title="証明の構造を Markdown のレポートにして写す・保存する">📄 レポート ▾</summary>
+      <div class="popPanel w-[min(440px,92vw)]">
+        <div class="text-[11px] text-stone-500 leading-relaxed">主語を選び、章を選んで「プレビュー」。事実は元の依存グラフで測り、型依存／値依存・導出図・極小元・経路を Markdown にまとめます。</div>
+        <div class="flex items-center gap-1 flex-wrap" id="reportSubject"></div>
+        <div id="reportSections" class="grid grid-cols-1 gap-y-0.5 text-[11.5px]"></div>
+        <div class="flex items-center gap-2 text-[11.5px] text-stone-500">導出図の深さ
+          <span id="reportDepth" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800"></span>
+          <span class="flex-1"></span>
+          <button id="reportAll" class="px-2 py-0.5 rounded-md text-[11px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800">全章</button>
+          <button id="reportNone" class="px-2 py-0.5 rounded-md text-[11px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800">主張のみ</button>
+        </div>
+        <div class="flex items-center gap-2 pt-1 border-t border-stone-200 dark:border-stone-700">
+          <button id="reportPreview" class="px-3 py-1.5 rounded-md text-[12.5px] bg-indigo-600 text-white hover:bg-indigo-500">プレビュー</button>
+          <button id="reportCopy" class="px-3 py-1.5 rounded-md text-[12.5px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800">コピー</button>
+          <button id="reportSave" class="px-3 py-1.5 rounded-md text-[12.5px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800">.md で保存</button>
+        </div>
+      </div>
+    </details>
+
+    <details id="dHist" class="pop shrink-0">
+      <summary class="px-3 h-9 flex items-center gap-1.5 rounded-md text-[13px] border border-stone-300 dark:border-stone-600
+                      hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer select-none list-none" title="中心の移動の履歴（木）。Ctrl+Z / Ctrl+Y で上り下り">履歴 <span id="histCount" class="text-[10.5px] text-stone-400"></span> ▾</summary>
+      <div class="popPanel w-[min(360px,92vw)]">
+        <div class="flex items-center gap-2">
+          <span class="text-[11px] uppercase tracking-wide text-stone-400">探索履歴</span>
+          <span class="flex-1"></span>
+          <button id="btnHistClear" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
+                  hover:bg-stone-100 dark:hover:bg-stone-800">消去</button>
+        </div>
+        <div id="histBody" class="max-h-72 overflow-y-auto"></div>
+      </div>
+    </details>
+
+    <details id="dPin" class="pop shrink-0">
+      <summary class="px-3 h-9 flex items-center gap-1.5 rounded-md text-[13px] border border-stone-300 dark:border-stone-600
+                      hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer select-none list-none" title="閲覧状態のピン留め（p で追加）">📌 ピン <span id="pinCount" class="text-[10.5px] text-stone-400"></span> ▾</summary>
+      <div class="popPanel w-[min(380px,92vw)]">
+        <div class="flex items-center gap-1.5 flex-wrap">
+          <button id="btnPinAdd" class="px-2.5 py-1 rounded-md text-[12px] bg-indigo-600 text-white hover:bg-indigo-500" title="いまの閲覧状態をピン留め (p)">＋ いまの状態をピン留め</button>
+          <span class="flex-1"></span>
+          <button id="btnPinCopy" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
+                  hover:bg-stone-100 dark:hover:bg-stone-800" title="全ピンを JSON でクリップボードへ">JSON コピー</button>
+          <button id="btnPinSave" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
+                  hover:bg-stone-100 dark:hover:bg-stone-800" title="全ピンを JSON ファイルに保存">保存</button>
+          <button id="btnPinLoad" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
+                  hover:bg-stone-100 dark:hover:bg-stone-800" title="JSON ファイルから取り込み">取込</button>
+          <input id="pinFile" type="file" accept=".json" class="hidden">
+        </div>
+        <div id="pinBody" class="max-h-72 overflow-y-auto"></div>
+      </div>
+    </details>
+
     <button id="btnData" class="shrink-0 px-3 h-9 rounded-md text-[13px] border border-stone-300 dark:border-stone-600
             hover:bg-stone-100 dark:hover:bg-stone-800">データ</button>
+
+    <details id="dHelp" class="pop shrink-0">
+      <summary class="w-9 h-9 flex items-center justify-center rounded-md text-[14px] text-stone-500
+                      hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer select-none list-none" title="凡例と操作">?</summary>
+      <div class="popPanel w-[min(520px,92vw)] text-[11px] text-stone-500 dark:text-stone-400 leading-relaxed">
+          <div><span style="color:#4F46E5">━</span> 型依存
+            <span style="color:#7C3AED">╌</span> 値依存<span class="text-stone-400">（上・中心が使う側）</span></div>
+          <div><span style="color:#0F766E">━</span> 主張で参照
+            <span style="color:#C2410C">╌</span> 証明で参照<span class="text-stone-400">（下・中心を使う側）</span></div>
+          <div>単クリック 選択（移動しない） / ダブルクリック 移動</div>
+          <div>ℓ は中心からの最長導出鎖の長さ</div>
+          <div class="pt-1 border-t border-stone-200 dark:border-stone-700">左の一覧: ▾ で枝を畳む。線は枝の範囲、藍の線は中心か選択を含む枝、
+            色のレールは名前空間。上端に固定される見出しを押すとそこへ戻る。薄い字は名前空間、濃い字が宣言名。</div>
+          <div><b>派生</b>: 由来（構造体・構成子・定義）から Lean が機械的に作る宣言（casesOn / mk.inj / sizeOf_spec / eq_1 …）。
+            既定では由来の行とグラフの節点に畳み、辺には「単射性」等の経由の札を付ける。
+            グラフの札 <b>◇k</b> は「この中心から見える派生の数」（0 なら薄い。開いても図は変わらず、一覧で見る）、
+            <b>◆n</b> は開いている、藍の <b>◆n</b> は固定で開いている（中心が派生、または経路表示の区間に派生があるとき。押しても閉じない）。
+            ノードの外の <b>+n</b> は別物で、深さの先に隠れている依存の数（押すと展開）。
+            一覧の「派生を全て開く」は全ての由来を開く／畳む操作で、個別の開閉と同じ集合を動かす。</div>
+          <div><b>断片</b>: 証明・本体から切り出された補助（_proof_1 / match_1）。由来に埋め戻し、節点には出さない。
+            <b>骨組み</b>: 論理結合子（And.intro / Eq.mpr）。「表示 ▾」で通り抜けを切り替える。</div>
+          <div><b>経路</b>: 極小元のチップや公理のチップを押すと、中心からそこへ至る順序区間 [t, c] = ↑t ∩ ↓c を
+            元の依存グラフで取り、区間に含まれる派生の由来を自動で開いて強調する（畳んだ派生の中だけを通る経路でも反応する）。</div>
+          <div><b>パッケージ</b>: 対象の外の宣言は縁の色で出どころ（<span style="color:#0284C7">Mathlib</span>
+            <span style="color:#16A34A">cslib</span> <span style="color:#78716C">core</span> …）を示す。凡例はグラフ左上。
+            「束ね」で「パッケージ」を選ぶと上の錐がパッケージごとの扇になる。右パネルの 📘 docs は公式ドキュメントの宣言ページへ直接飛ぶ。</div>
+          <div><b>右パネル</b>: 主語は一つ（「追従」なら選択中の宣言、「中心固定」ならグラフの中心）。
+            依存・参照のタブもその宣言について出す。中央の見出しは常にグラフの中心。
+            見た宣言の履歴は ‹ › と <kbd>[</kbd> <kbd>]</kbd> で戻る／進む。チップを押すとその宣言を見てグラフで選択する。
+            「原文」はソースの宣言範囲そのもの、「型（Lean の表示）」は Lean が整形した型。凡例（グラフ左上）は指すと展開。
+            枠付きのものは押せる（docs・公理・由来・派生・↗）、平らな札は押せない。導出図では前提の名前を押すとその場で開閉し、
+            行末の ↗ でその宣言へ移る（‹ で戻れる）。語彙の札は、クリックでグラフの経路を強調、ダブルクリックでプレビューだけ移る。</div>
+          <div><b>レポート</b>（上部バー）: 中心／選択／極小元を主語に、主張・型依存・値依存・公理の由来・導出図・極小元・参照・経路・計量・来歴を Markdown で写す。
+            章「付録: 図」を選ぶと、公理の流入・導出図・境界・経路の Mermaid 図を末尾にまとめる（本文には挟まない）。</div>
+          <div><kbd>/</kbd>検索 <kbd>t</kbd>型のみ <kbd>m</kbd>粒度 <kbd>v</kbd>下錐 <kbd>p</kbd>ピン <kbd>0</kbd>全体 <kbd>f</kbd>集中 <kbd>[</kbd><kbd>]</kbd>見た宣言の前後</div>
+      </div>
+    </details>
     <button id="btnSideR" class="shrink-0 w-9 h-9 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-500 text-[16px]" title="右パネルの開閉">▤</button>
     <button id="themeBtn" class="shrink-0 w-9 h-9 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-[15px]" title="配色切替">
       <span id="themeIcon">☀</span></button>
@@ -276,71 +376,6 @@
                   bg-white dark:bg-stone-900" style="width:312px">
       <div id="depTabs" class="shrink-0 p-2 flex gap-1 flex-wrap border-b border-stone-200 dark:border-stone-800"></div>
       <div id="depBody" class="flex-1 min-h-0 overflow-y-auto p-1.5"></div>
-
-      <!-- 下の三つは既定で畳む。常時開いていると本文の高さを奪う -->
-      <details id="dHist" class="shrink-0 border-t border-stone-200 dark:border-stone-800">
-        <summary class="px-3 py-1.5 cursor-pointer flex items-center gap-2 select-none
-                        hover:bg-stone-50 dark:hover:bg-stone-800/50">
-          <span class="text-[11px] uppercase tracking-wide text-stone-400">探索履歴</span>
-          <span id="histCount" class="text-[10.5px] text-stone-400"></span>
-          <span class="flex-1"></span>
-          <button id="btnHistClear" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
-                  hover:bg-stone-100 dark:hover:bg-stone-800">消去</button>
-        </summary>
-        <div id="histBody" class="max-h-44 overflow-y-auto px-1.5 pb-1.5"></div>
-      </details>
-
-      <details id="dPin" class="shrink-0 border-t border-stone-200 dark:border-stone-800">
-        <summary class="px-3 py-1.5 cursor-pointer flex items-center gap-1.5 select-none
-                        hover:bg-stone-50 dark:hover:bg-stone-800/50">
-          <span class="text-[11px] uppercase tracking-wide text-stone-400">ピン留め</span>
-          <span id="pinCount" class="text-[10.5px] text-stone-400"></span>
-          <span class="flex-1"></span>
-          <button id="btnPinCopy" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
-                  hover:bg-stone-100 dark:hover:bg-stone-800" title="全ピンを JSON でクリップボードへ">コピー</button>
-          <button id="btnPinSave" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
-                  hover:bg-stone-100 dark:hover:bg-stone-800" title="全ピンを JSON ファイルに保存">保存</button>
-          <button id="btnPinLoad" class="text-[10.5px] px-1.5 py-0.5 rounded-sm text-stone-400 hover:text-stone-700
-                  hover:bg-stone-100 dark:hover:bg-stone-800" title="JSON ファイルから取り込み">取込</button>
-          <input id="pinFile" type="file" accept=".json" class="hidden">
-        </summary>
-        <div id="pinBody" class="max-h-44 overflow-y-auto px-1.5 pb-1.5"></div>
-      </details>
-
-      <details id="dHelp" class="shrink-0 border-t border-stone-200 dark:border-stone-800">
-        <summary class="px-3 py-1.5 cursor-pointer select-none text-[11px] uppercase tracking-wide
-                        text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800/50">凡例と操作</summary>
-        <div class="px-3 pb-2 text-[11px] text-stone-500 dark:text-stone-400 leading-relaxed space-y-1">
-          <div><span style="color:#4F46E5">━</span> 型依存
-            <span style="color:#7C3AED">╌</span> 値依存<span class="text-stone-400">（上・中心が使う側）</span></div>
-          <div><span style="color:#0F766E">━</span> 主張で参照
-            <span style="color:#C2410C">╌</span> 証明で参照<span class="text-stone-400">（下・中心を使う側）</span></div>
-          <div>単クリック 選択（移動しない） / ダブルクリック 移動</div>
-          <div>ℓ は中心からの最長導出鎖の長さ</div>
-          <div class="pt-1 border-t border-stone-200 dark:border-stone-700">左の一覧: ▾ で枝を畳む。線は枝の範囲、藍の線は中心か選択を含む枝、
-            色のレールは名前空間。上端に固定される見出しを押すとそこへ戻る。薄い字は名前空間、濃い字が宣言名。</div>
-          <div><b>派生</b>: 由来（構造体・構成子・定義）から Lean が機械的に作る宣言（casesOn / mk.inj / sizeOf_spec / eq_1 …）。
-            既定では由来の行とグラフの節点に畳み、辺には「単射性」等の経由の札を付ける。
-            グラフの札 <b>◇k</b> は「この中心から見える派生の数」（0 なら薄い。開いても図は変わらず、一覧で見る）、
-            <b>◆n</b> は開いている、藍の <b>◆n</b> は固定で開いている（中心が派生、または経路表示の区間に派生があるとき。押しても閉じない）。
-            ノードの外の <b>+n</b> は別物で、深さの先に隠れている依存の数（押すと展開）。
-            一覧の「派生を全て開く」は全ての由来を開く／畳む操作で、個別の開閉と同じ集合を動かす。</div>
-          <div><b>断片</b>: 証明・本体から切り出された補助（_proof_1 / match_1）。由来に埋め戻し、節点には出さない。
-            <b>骨組み</b>: 論理結合子（And.intro / Eq.mpr）。「表示 ▾」で通り抜けを切り替える。</div>
-          <div><b>経路</b>: 極小元のチップや公理のチップを押すと、中心からそこへ至る順序区間 [t, c] = ↑t ∩ ↓c を
-            元の依存グラフで取り、区間に含まれる派生の由来を自動で開いて強調する（畳んだ派生の中だけを通る経路でも反応する）。</div>
-          <div><b>パッケージ</b>: 対象の外の宣言は縁の色で出どころ（<span style="color:#0284C7">Mathlib</span>
-            <span style="color:#16A34A">cslib</span> <span style="color:#78716C">core</span> …）を示す。凡例はグラフ左上。
-            「束ね」で「パッケージ」を選ぶと上の錐がパッケージごとの扇になる。右パネルの 📘 docs は公式ドキュメントの宣言ページへ直接飛ぶ。</div>
-          <div><b>右パネル</b>: 主語は一つ（「追従」なら選択中の宣言、「中心固定」ならグラフの中心）。
-            依存・参照のタブもその宣言について出す。中央の見出しは常にグラフの中心。
-            見た宣言の履歴は ‹ › と <kbd>[</kbd> <kbd>]</kbd> で戻る／進む。チップを押すとその宣言を見てグラフで選択する。
-            「原文」はソースの宣言範囲そのもの、「型（Lean の表示）」は Lean が整形した型。凡例（グラフ左上）は指すと展開。
-            枠付きのものは押せる（docs・公理・由来・派生・↗）、平らな札は押せない。導出図では前提の名前を押すとその場で開閉し、
-            行末の ↗ でその宣言へ移る（‹ で戻れる）。語彙の札は、クリックでグラフの経路を強調、ダブルクリックでプレビューだけ移る。</div>
-          <div><kbd>/</kbd>検索 <kbd>t</kbd>型のみ <kbd>m</kbd>粒度 <kbd>v</kbd>下錐 <kbd>p</kbd>ピン <kbd>0</kbd>全体 <kbd>f</kbd>集中 <kbd>[</kbd><kbd>]</kbd>見た宣言の前後</div>
-        </div>
-      </details>
     </aside>
   </div>
 </div>
@@ -383,6 +418,24 @@
   </div>
 </dialog>
 
+<!-- ============ レポートのプレビュー ============ -->
+<dialog id="reportDlg" class="rounded-xl p-0 w-[min(900px,94vw)] bg-white dark:bg-stone-900
+        text-stone-900 dark:text-stone-100 shadow-2xl border border-stone-200 dark:border-stone-700">
+  <div class="p-4 space-y-3">
+    <div class="flex items-center gap-2">
+      <h2 class="text-[15px] font-medium">レポート</h2>
+      <span id="reportDlgInfo" class="text-[11.5px] text-stone-500"></span>
+      <span class="flex-1"></span>
+      <button id="reportDlgCopy" class="px-3 py-1.5 rounded-md text-[12.5px] bg-indigo-600 text-white hover:bg-indigo-500">コピー</button>
+      <button id="reportDlgSave" class="px-3 py-1.5 rounded-md text-[12.5px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800">.md で保存</button>
+      <button id="reportDlgClose" class="w-8 h-8 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800">✕</button>
+    </div>
+    <textarea id="reportText" readonly spellcheck="false" rows="28"
+      class="w-full font-mono text-[11.5px] leading-relaxed p-2 rounded-lg bg-stone-50 dark:bg-stone-950
+             border border-stone-200 dark:border-stone-700 outline-none"></textarea>
+  </div>
+</dialog>
+
 <div id="toast" class="fixed left-1/2 -translate-x-1/2 bottom-6 px-3.5 py-2 rounded-lg text-[13px]
      bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900 shadow-lg opacity-0 pointer-events-none z-50"></div>
 
@@ -395,6 +448,7 @@
 <script src="js/store.js"></script>
 <script src="js/canvas.js"></script>
 <script src="js/panels.js"></script>
+<script src="js/report.js"></script>
 <script src="index.js"></script>
 </body>
 </html>

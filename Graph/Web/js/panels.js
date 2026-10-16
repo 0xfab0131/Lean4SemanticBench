@@ -797,20 +797,26 @@
     const argRows = args.map((b) => line(binderHtml(b)));
     const hypRows = hyps.map((b) => line(binderHtml(b)));
 
-    const d = LDR.sig.decompose(nd.conclusion || "");
+    /* 左辺・右辺に割るのは命題だけ。定義の型 `Scheme F R Party F` を関係の適用として割ると
+       「左辺 Party / 右辺 F」という誤読になる（実測）。定義は「型」として一行で出す。 */
     const conclRows = [];
-    if (d.lhs !== null && d.rhs !== null) {
-      conclRows.push(line(`${sub("主結合子")}<span class="font-mono text-indigo-700 dark:text-indigo-300">${esc(LDR.sig.abbrev(d.rel))}</span>`
-        + (d.ctx.length ? ` <span class="text-stone-400">${esc(LDR.sig.abbrev(d.ctx.join(" ")))}</span>` : "")));
-      conclRows.push(line(`${sub("左辺")}${expr(d.lhs)}`));
-      conclRows.push(line(`${sub("右辺")}${expr(d.rhs)}`));
-    } else if (d.whole) {
-      conclRows.push(line(expr(d.whole)));
+    if (nd.isProp) {
+      const d = LDR.sig.decompose(nd.conclusion || "");
+      if (d.lhs !== null && d.rhs !== null) {
+        conclRows.push(line(`${sub("主結合子")}<span class="font-mono text-indigo-700 dark:text-indigo-300">${esc(LDR.sig.abbrev(d.rel))}</span>`
+          + (d.ctx.length ? ` <span class="text-stone-400">${esc(LDR.sig.abbrev(d.ctx.join(" ")))}</span>` : "")));
+        conclRows.push(line(`${sub("左辺")}${expr(d.lhs)}`));
+        conclRows.push(line(`${sub("右辺")}${expr(d.rhs)}`));
+      } else if (d.whole) {
+        conclRows.push(line(expr(d.whole)));
+      }
+    } else if (nd.conclusion) {
+      conclRows.push(line(expr(nd.conclusion)));
     }
     return [
       section("引数", argRows, "#d6d3d1", "text-stone-400"),
       section("仮定", hypRows, "#fbbf24", "text-amber-600 dark:text-amber-500"),
-      section("結論", conclRows, "#818cf8", "text-indigo-600 dark:text-indigo-400"),
+      section(nd.isProp ? "結論" : "型", conclRows, "#818cf8", "text-indigo-600 dark:text-indigo-400"),
     ].filter(Boolean).join("");
   }
 
@@ -1388,8 +1394,10 @@
     once("min", dv.center + "|" + st.traceTarget + "|" + (dv.traceUnreachable || "") + "|" + tm.length + "|" + visSig, () => {
       const el = $("minimalBox");
       const vis = dv.posAll || {};
+      const fr = (dv.frontier || []).length;
       $("minCount").textContent =
-        `${tm.length} 件 / 上向きの全 ${dv.fullDownSize || 0} 件のうち依存先を持たないもの`;
+        `${tm.length} 件 / 下方閉集合 ${dv.fullDownSize || 0} 件のうち依存先を持たないもの`
+        + (fr ? `（ほかに境界 ${fr} 件: レポートの範囲外で依存が続くもの。極小元ではない）` : "");
       /* 公理チップ等から経路表示を求めたが、読み込んだ範囲に中心からの経路が無い。
          公理は Lean 側が証明項を最後まで辿って集めたもので、依存グラフは一段先までしか
          持たないので、両者の食い違いは起こり得る。黙って全てを暗くせず、ここで伝える。
