@@ -37,10 +37,11 @@
     if (!t) return;
     if (t.dataset.pback !== undefined) { S.actions.previewBack(); return; }
     if (t.dataset.pfwd !== undefined) { S.actions.previewForward(); return; }
-    // 単クリック = グラフで経路を強調（プレビューは動かさない）、素早い 2 回目 = 中心にする
+    // 単クリック = グラフで経路を強調（プレビューは動かさない）、素早い 2 回目 = プレビューだけその宣言へ
+    // （中心は動かさない。履歴に積まれるので ‹ で戻れる）
     if (t.dataset.hl !== undefined) {
       const n = t.dataset.hl, now = Date.now();
-      if (onClick._last === n && now - (onClick._t || 0) < 380) { S.actions.navigate(n); onClick._last = null; }
+      if (onClick._last === n && now - (onClick._t || 0) < 380) { S.actions.preview(n); onClick._last = null; }
       else { S.actions.highlight(n); onClick._last = n; onClick._t = now; }
       return;
     }

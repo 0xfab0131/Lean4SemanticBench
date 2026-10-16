@@ -1018,9 +1018,13 @@
     if (parts.vocab.length) {
       // 語彙: 単クリックでグラフの経路を強調（図は読んだまま）、ダブルクリックで中心にする
       const chips = parts.vocab.map((v) => `<button class="tag hl font-mono" data-hl="${esc(v.name)}" title="${esc(v.name)}（語彙: 主張を書くための定義・型）
-クリック: グラフで中心までの経路を強調 / ダブルクリック: 中心にする">${esc(shortOf(v.name))}</button>`).join(" ");
+クリック: グラフで中心までの経路を強調 / ダブルクリック: プレビューでこの宣言を見る（中心は動かない。‹ で戻れる）">${esc(shortOf(v.name))}</button>`).join(" ");
+      /* 多いときは畳む。開閉は状態（derivOpen の鍵 "vocab:<名前>"）に持つ。`<details>` に任せると、
+         札を押して選択が変わるたびに右パネルが組み直され、毎回閉じた（実測）。 */
+      const vk = "vocab:" + name;
+      const vopen = st.derivOpen.has(vk);
       foot.push(parts.vocab.length > 8
-        ? `<details class="inline"><summary class="cursor-pointer inline" style="color:${LDR.roles.ROLE.vocab.c}" title="主張を書くための定義・型（前提ではない）">語彙 ${parts.vocab.length} ▸</summary> ${chips}</details>`
+        ? `<button data-deriv="${esc(vk)}" class="hover:underline" style="color:${LDR.roles.ROLE.vocab.c}" title="主張を書くための定義・型（前提ではない）。押すと${vopen ? "畳む" : "開く"}">語彙 ${parts.vocab.length} ${vopen ? "▾" : "▸"}</button>${vopen ? " " + chips : ""}`
         : `<span style="color:${LDR.roles.ROLE.vocab.c}" title="主張を書くための定義・型（前提ではない）">語彙 ${parts.vocab.length}</span> ${chips}`);
     }
     if (parts.frame.length) foot.push(`<span class="text-stone-400" title="${esc(parts.frame.map((v) => v.name).join(", "))}">骨組み ${parts.frame.length}</span>`);
