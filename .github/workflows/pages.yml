@@ -1,0 +1,116 @@
+# cslib（Commitment / SecretSharing）の解析結果を GitHub Pages に配置する。
+#
+# 流れ: 対象 Debug/Examples（cslib を lake-manifest.json で rev 固定）を Commands/Scripts/l4sb.sh で
+#   init → report（対象ビルド → 解析器ビルド → decl_report）→ check → web（埋め込み）
+# と回し、ldr_check と ldr_render_check を **両方** 通過した場合だけ Graph/Web を配置する。
+# 検査に落ちたレポートは公開しない（黙って壊れたページを出さない）。
+#
+# 時間: 初回は Mathlib のビルド済み成果物の取得（lake exe cache get）と cslib のビルドで数十分。
+# 二回目以降は .lake / .l4sb / ~/.elan のキャッシュで短くなる。--fetch-cache は毎回付ける
+# （取得済みなら差分だけで安価。キャッシュが部分的に復元された状態で Mathlib をソースから
+# ビルドし始めることが無い）。
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Graph/**"
+      - "Commands/**"
+      - "Debug/Examples/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 配置は一度に一つ。進行中のものは止めない（配置の途中で切ると Pages が中途半端になる）
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  TARGET: Debug/Examples
+  MODULES: Cslib.Crypto.Protocols.Commitment Cslib.Crypto.Protocols.SecretSharing
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      # Mathlib の成果物は数 GB。既定の runner は空きが十分でないことがあるので、不要な SDK を外す
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install elan
+        run: |
+          curl -sSfL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      # 鍵は対象の manifest と toolchain。解析器のソースは鍵に入れない（衛星の stamp がソースの
+      # 変更を検出して再複写・再ビルドする）。restore-keys で古いキャッシュからの差分更新を許す
+      - name: Cache Lean toolchain, packages and builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.elan
+            ${{ env.TARGET }}/.lake
+            ${{ env.TARGET }}/.l4sb
+          key: l4sb-${{ runner.os }}-${{ hashFiles('Debug/Examples/lake-manifest.json', 'Debug/Examples/lean-toolchain') }}
+          restore-keys: |
+            l4sb-${{ runner.os }}-
+
+      - name: Lean toolchain of the target
+        run: |
+          cd "$TARGET"
+          lean --version
+          lake --version
+
+      # ビューアの代替データ js/sample.js は生成物（Graph/.gitignore）。フィクスチャ Examples を先に
+      # 解析して作る（cslib のビルド後なので数分）。その後に本題の cslib を解析し、埋め込みを上書きする
+      - name: Analyze the fixture and regenerate js/sample.js
+        run: |
+          make all TARGET="$TARGET" ARGS="--fetch-cache"
+          node Graph/make_sample.js
+
+      - name: Analyze cslib (init → report → check → web)
+        run: |
+          make all TARGET="$TARGET" MODULES="$MODULES" ARGS="--import-all --fetch-cache"
+
+      - name: Render smoke test (DOM stand-in)
+        run: node Graph/ldr_render_check.js Graph/report.jsonl
+
+      - name: Assemble site
+        run: |
+          rm -rf site
+          mkdir -p site
+          cp -r Graph/Web/. site/
+          cp Graph/report.jsonl site/report.jsonl
+          cp Graph/report.meta.json site/report.meta.json
+          touch site/.nojekyll
+          ls -la site site/js
+          du -sh site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: analyze
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -382,12 +382,29 @@ def directDepsOfCore (env : Environment) (n : Name) : DirectDeps :=
   match env.find? n with
   | none    => {}
   | some ci =>
-    let fromType  := collectConsts ci.type
+    /- 帰納型は「型 ＋ 構成子の型」で定義される。`Field : Type u → Type u` の型には定数が無く
+       値も無いので、型だけを見ると `Field` は依存ゼロの原子に見える。一方 core の `collectAxioms` は
+       `.inductInfo v => v.ctors.forM collect` で構成子の型まで辿るので、「依存先は無いのに公理を持つ」
+       宣言が生まれ、極小元（`Field`・`Finset`・`Fintype`・`Semiring` … が原子として並ぶ）と公理の由来
+       （`Field` が最初に現れる宣言なのにその先が無い）が矛盾する（cslib で実測）。
+       構成子の型に現れる定数を **型依存** に加える。構成子の型は帰納型の仕様であって証明ではない。
+       帰納型自身と同じ相互帰納ブロックの型（`iv.all`）は除く（`Nat.succ : Nat → Nat` の自己参照や
+       相互再帰で巡回を作らない）。core の原子（`And.intro`・`Eq.refl`・`Nat.succ`）は構成子の型に外部の
+       定数を持たないので原子のまま残り、`Field.mk` は `CommRing`・`Inv`・`Div`・`Rat` … への辺を得る。 -/
+    let (ctorTypes, block) : NameSet × List Name := match ci with
+      | .inductInfo iv =>
+        let s := iv.ctors.foldl (init := ({} : NameSet)) fun acc c =>
+          match env.find? c with
+          | some cc => acc.union (collectConsts cc.type)
+          | none    => acc
+        (s, iv.all)
+      | _ => ({}, [])
+    let fromType  := (collectConsts ci.type).union ctorTypes
     let fromValue := match ci.value? (allowOpaque := true) with
       | some v => collectConsts v
       | none   => {}
     let tD := fromType.foldl (init := ({} : NameSet)) fun acc m =>
-      if m == n then acc else acc.insert m
+      if m == n || block.contains m then acc else acc.insert m
     let vD := fromValue.foldl (init := ({} : NameSet)) fun acc m =>
       if m == n || fromType.contains m then acc else acc.insert m
     { typeDeps := tD, valueDeps := vD }
@@ -849,8 +866,8 @@ def analyzeDeclSingle (ci : ConstantInfo) (valueChars : Nat := 0) : MetaM DeclRe
 深さの既定値は事実上無制限（1000000）で、そのときフロンティアは必ず空になる。
 閉包は深さの有無に関わらず同じ BFS（`downwardClosure`）で辿る。
 
-注意: ここでの min(↓d) は「型にも値にも定数を一つも含まない宣言」であり、
-`Nat` や `Bool` のような **語彙の原子** である。`propext` は `Iff` と `Eq` を
+注意: ここでの min(↓d) は「型にも値にも（帰納型なら構成子の型にも）定数を一つも含まない宣言」
+であり、`Nat` や `Bool` のような **語彙の原子** である。`propext` は `Iff` と `Eq` を
 参照するので極小元ではない。公理は `collectAxioms` で別に報告する。 -/
 
 /-- 深さ付きの下方閉集合を BFS で構築する。 -/

@@ -1,0 +1,62 @@
+# Lean4SemanticBench — 開発用 Makefile(利用者向けの入口はルートの Makefile)
+
+.DEFAULT_GOAL := help
+.PHONY: help build verify check render self sample
+
+help:
+	@echo "Lean4SemanticBench — 開発用 Makefile"
+	@echo ""
+	@echo "  make -f Makefile.dev build    解析器(ライブラリ+実行ファイル)をビルド"
+	@echo "  make -f Makefile.dev verify   スクリプト・Web 層の全 JS の構文検査"
+	@echo "  make -f Makefile.dev check    算法層の不変条件を実データで検査 (ldr_check)  [REPORT=path]"
+	@echo "  make -f Makefile.dev render   DOM の代役で右パネル・見出し・一覧を組み立てる煙試験 [REPORT=path]"
+	@echo "  make -f Makefile.dev self     自己解析(解析器で解析器を解析)+ 検査"
+	@echo "  make -f Makefile.dev sample   フィクスチャの実レポートから sample.js を再生成"
+
+REPORT ?= Graph/report.jsonl
+
+# 算法層(graph/store)と表示層(panels)の両方を、同じレポートで通す。
+# verify が構文だけなのに対し、こちらは意味(不変条件・文言)まで見る。
+check:
+	node Graph/ldr_check.js $(REPORT)
+
+render:
+	node Graph/ldr_render_check.js $(REPORT)
+
+# 対話コマンド(Commands.lean)も含めた全ビルド。exe だけを標的にすると
+# Commands がコンパイルされず検証が不完全になる(実測済みの見逃し)。
+build:
+	cd Graph && lake build LeanDeclReport decl_report
+
+verify:
+	bash -n Commands/Scripts/l4sb.sh
+	node --check Commands/Scripts/lib/target_info.js
+	node --check Commands/Scripts/lib/verify_manifest.js
+	node --check Graph/ldr_check.js
+	node --check Graph/ldr_render_check.js
+	node --check Graph/make_default_report.js
+	node --check Graph/make_sample.js
+	node --check Graph/Web/index.js
+	node --check Graph/Web/js/graph.js
+	node --check Graph/Web/js/sig.js
+	node --check Graph/Web/js/pkg.js
+	node --check Graph/Web/js/roles.js
+	node --check Graph/Web/js/store.js
+	node --check Graph/Web/js/canvas.js
+	node --check Graph/Web/js/panels.js
+	node --check Graph/Web/js/report.js
+	node --check Graph/Web/js/persist.js
+	@echo "verify: OK"
+
+# 自己解析。対象がモジュール LeanDeclReport を提供するため衛星は使えない
+# (名前衝突で init が停止する。Commands/Scripts/README.md 参照)。
+# 開発ワークスペース自身が「対象=解析器の家」なので、直接実行で環境同一性が成立する。
+self: build
+	cd Graph && lake env .lake/build/bin/decl_report LeanDeclReport > report.jsonl
+	node Graph/ldr_check.js Graph/report.jsonl
+	@echo "self: Graph/report.jsonl を生成・検査しました(ビューアへは Commands/Scripts/l4sb.sh web で埋め込み)"
+
+# sample.js は新規 clone の動作確認フォールバックの実体。手で保守せず、
+# 検証フィクスチャの実レポート(make all で生成)から作り直す。
+sample:
+	node Graph/make_sample.js

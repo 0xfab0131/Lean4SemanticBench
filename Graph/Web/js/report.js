@@ -680,6 +680,11 @@
     "- 付録の図は本文の各節と同じ事実を Mermaid の flowchart で描いたもの（記法は付録の頭）。描けない環境では本文を読む。",
   ];
 
+  /* 末尾の但し書き。レポートの性格（現状の証明構造の解析であって、成否や意味論の保証ではないこと、
+     何のための材料か）を、章の選択に関わらず常に最後に置く。 */
+  const DISCLAIMER = ["",
+    "※上記はあくまで現状の証明構造に関する解析結果であり、その成否や意味論の保証をする事は無いです。しかし、これらの結果を踏まえた上での、メタ的な改善を実施することは、同じ証明や構成を行う事が出来る、より本質的な文脈や流れ、その他の可能な構成・経路を模索する為のレポートとしての側面を持ち、公理依存・過剰な依存が解消について考えたり、意味論や体系について考えを深め、整理する為の材料を提供します。"];
+
   /** kind: "center" | "selected" | "minimal"。
       opts: { sections: string[], depth: 1..3, fullNames, frontierNames, edgeList }（書き方の既定は情報を落とさない側）。
       章 figures を選ぶと、各節が積んだ図を末尾の付録にまとめる。 */
@@ -718,6 +723,7 @@
     if (sections.has("meta")) out.push(...metaSection());
     if (fx.on && fx.figs.length) out.push(...appendixLines(fx));
     if (sections.has("notes")) out.push(...NOTES);
+    out.push(...DISCLAIMER);
     return { ok: true, text: out.join("\n") + "\n", subject, msg: "" };
   }
 

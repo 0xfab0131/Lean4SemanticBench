@@ -140,6 +140,8 @@ ok(Object.keys(S.derived.posAll).length > 1, "束ね=パッケージでも配置
   ok(!rc.text.includes("## 経路") && !rc.text.includes("## 注記"), "中心のレポートに経路の章は無く、注記は選ばない限り入らない");
   const rn = R.build("center", { sections: ["claim", "notes"], fullNames: false });
   ok(rn.text.includes("## 注記") && !rn.text.includes("## 型依存"), "注記は選んだときだけ末尾に入る");
+  const endsWithNote = (t) => t.trimEnd().endsWith("整理する為の材料を提供します。");
+  ok(endsWithNote(rc.text) && endsWithNote(rn.text) && rn.text.indexOf("※上記は") > rn.text.indexOf("## 注記"), "但し書きは章の選択に関わらず最後に置かれる");
   const cenNd = S.state.nodes[cen];
   if (cenNd.axioms.length) {
     ok(rc.text.includes(`### \`${cenNd.axioms[0]}\``) && /主張（型）の依存|証明（値）にだけ入っている/.test(rc.text), "公理ごとに主張か証明かの判定が出る", cenNd.axioms.join(", "));
