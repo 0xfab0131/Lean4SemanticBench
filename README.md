@@ -1,4 +1,4 @@
-# Lean4SemanticBench
+# [prototype] Lean4SemanticBench
 
 ## 最短の使い方
 
