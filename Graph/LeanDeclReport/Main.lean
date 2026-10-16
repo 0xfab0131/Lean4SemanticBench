@@ -6,14 +6,19 @@
   使い方:
     lake build                                   -- 先に対象をビルドしておく
     lake exe decl_report MyProject > report.jsonl
+    lake exe decl_report MyProject.Sub.Dir ...   -- 接頭辞（ディレクトリ）でもよい
     lake exe decl_report MyProject --minimal MyProject.Core.mainResult
 
   実装メモ:
-  - 環境の構築は `Lean.withImportModules`（`unsafe`）を使う。
-    これは lean4checker が採用しているのと同じイディオムで、
-    `importModules` を直接呼ぶよりシグネチャ変更に強い。
+  - 環境の構築は `Lean.importModules (loadExts := true)` を使う。
+    `withImportModules` は常に `loadExts := false` で環境を作り（core の定義で確認）、
+    その環境ではインスタンス表や記法の unexpander が初期値のまま空になる。
+    結果として `isInstance` が全宣言で偽、pretty print が記法なしの前置形になる
+    （自己解析で実測）。詳細は `mainImpl` のコメント。
   - `MetaM` の実行は `MetaM.toIO ctxCore sCore` を使う。
   - 出力は 1 行 1 宣言の JSON Lines。`jq` や pandas で後処理しやすい。
+    `scope` は target / internal / external の三値（`declReportToJsonLine` 参照）。
+    `origin` / `originKind` / `originRel` は由来（Basic.lean `originOf`）。
 -/
 import LeanDeclReport.Basic
 
@@ -48,8 +53,11 @@ def jsonBinders (xs : Array BinderView) : String :=
     ",\"type\":" ++ jsonStr b.type ++ "}"
   "[" ++ String.intercalate "," items ++ "]"
 
-/-- `scope` は "target"（対象モジュールで定義された宣言）か
-    "external"（対象から参照されているだけの外部宣言）。
+/-- `scope` は三値。
+    - "target"   対象モジュールで定義された宣言（一覧に出る）。
+    - "internal" 対象モジュール内の内部補助（`_proof_*` / `match_*` 等）。一覧には
+                 出さないが対象の一部なので、その依存まで辿る。
+    - "external" 対象の外で定義され、参照されているだけの宣言（一段だけ）。
     外部の宣言を名前だけのスタブにすると、`Entails.trans` のような
     本当の前提が「型が分からないもの」に落ちて、補題と語彙の区別がつかなくなる。 -/
 def declReportToJsonLine (r : DeclReport) (scope : String := "target") : String :=
@@ -81,11 +89,15 @@ def declReportToJsonLine (r : DeclReport) (scope : String := "target") : String 
     "\"shape\":"       ++ jsonStr r.shape,
     "\"shapeRel\":"    ++ jsonStr (toString r.shapeRel),
     "\"shapeRel2\":"   ++ jsonStr (toString r.shapeRel2),
+    "\"shapeType\":"   ++ jsonStr (toString r.shapeType),
     "\"binders\":"     ++ jsonBinders r.binders,
     "\"conclusion\":"  ++ jsonStr r.conclusion,
     "\"typeString\":"  ++ jsonStr r.typeString,
     "\"valueString\":" ++ jsonStr r.valueString,
-    "\"docString\":"   ++ jsonStr r.docString
+    "\"docString\":"   ++ jsonStr r.docString,
+    "\"origin\":"      ++ jsonStr (toString r.origin),
+    "\"originKind\":"  ++ jsonStr r.originKind,
+    "\"originRel\":"   ++ jsonStr r.originRel
   ] |> fun body => "{" ++ body ++ "}"
 
 /-! ## 対象宣言の絞り込み -/
@@ -98,6 +110,44 @@ def isTargetDecl (env : Environment) (targets : Array Name) (n : Name) : Bool :=
   else
     let m := moduleOf env n
     targets.any fun t => t.isPrefixOf m
+
+/-! ## 対象の指定: モジュール名と、その接頭辞（ディレクトリ）
+
+対象は「モジュール名」でも「モジュール名の接頭辞」でもよい。`Cslib.Crypto.Protocols.Commitment`
+のように根ファイル `Commitment.lean` を持たない接頭辞は、検索パスの中の対応するディレクトリ配下の
+`.olean` を全て集めてモジュール名に展開し、それらを import する（`.olean.server` /
+`.olean.private` はモジュールシステムの別水準なので除く）。宣言の絞り込み（`isTargetDecl`）は
+元から接頭辞で判定するので、どちらで指定しても同じ集合になる。 -/
+
+/-- 名前を検索パスのモジュール（`.olean` を持つ）か、ディレクトリとして展開する。
+    どちらでもなければエラー（黙って空にしない）。 -/
+def expandModulePrefix (sp : SearchPath) (n : Name) : IO (Array Name) := do
+  /- `SearchPath.findWithExt` は「根のパッケージディレクトリが検索パスに在るか」で経路を返すだけで、
+     ファイルの実在は見ない（core `Lean/Util/Path.lean`）。`Cslib.Crypto.Protocols.Commitment` でも
+     `Cslib/` が在れば経路が返る。実在を確かめてからモジュールと見なす（実測で露見）。 -/
+  if let some p ← sp.findWithExt "olean" n then
+    if ← p.pathExists then return #[n]
+  let rel : System.FilePath := System.mkFilePath (n.components.map toString)
+  let mut acc : Array Name := #[]
+  for root in sp do
+    let dir := root / rel
+    unless ← dir.isDir do continue
+    for f in ← dir.walkDir do
+      -- `X.olean` だけ。`X.olean.server` / `X.olean.private` の拡張子は server / private
+      unless f.extension == some "olean" do continue
+      let rootStr := root.toString
+      let fStr := f.toString
+      unless fStr.startsWith rootStr do continue
+      -- 文字列 API は版で型が変わる（v4.33 で `String.drop` がスライスを返す）ので、
+      -- `List Char` を経由して版に依らない形で相対パスを切り出す
+      let relChars := fStr.toList.drop (rootStr.length + 1)
+      let relStr := String.ofList (relChars.take (relChars.length - ".olean".length))
+      let parts := relStr.splitOn System.FilePath.pathSeparator.toString
+      let m := parts.foldl (fun (a : Name) (s : String) => Name.str a s) Name.anonymous
+      acc := acc.push m
+  if acc.isEmpty then
+    throw <| IO.userError s!"モジュールまたは接頭辞 {n} が検索パスに見つかりません（対象をビルドしましたか？）"
+  return (acc.qsort Name.lt).toList.eraseDups.toArray
 
 /-! ## 実行本体 -/
 
@@ -199,51 +249,94 @@ unsafe def mainImpl (args : List String) : IO UInt32 := do
     return 1
   | .ok parsed =>
     initSearchPath (← findSysroot)
+    -- 対象の名前をモジュール（または接頭辞配下のモジュール群）に展開する
+    let sp ← searchPathRef.get
+    let mut mods : Array Name := #[]
+    for m in parsed.modules do
+      let ex ← expandModulePrefix sp m
+      if ex.size != 1 || ex[0]! != m then
+        IO.eprintln s!"接頭辞 {m} を {ex.size} モジュールに展開: {ex.toList}"
+      mods := mods ++ ex
     -- モジュールシステムの対象では、素の import だと定理の証明項が省略される。
     -- --import-all で非公開情報（証明・private 宣言）まで読み込む。
-    let imports : Array Import := parsed.modules.map fun m =>
+    let imports : Array Import := mods.map fun m =>
       { module := m, importAll := parsed.importAll }
-    withImportModules imports {} fun env => do
-      let coreCtx : Core.Context := { fileName := "<decl_report>", fileMap := default }
-      let coreState : Core.State := { env }
-      match parsed.minimal? with
-      | some root =>
-        let (text, _) ← (runMinimalReport env root).toIO coreCtx coreState
-        IO.println text
-      | none =>
-        let names := targetDeclNames env parsed.modules
-        let (reports, shapeless, skipped) ← collectAllReports env names parsed.valueChars coreCtx coreState
-        unless shapeless.isEmpty do
-          IO.eprintln s!"注記: {shapeless.size} 件の宣言で形の判定（defeq）が heartbeat 上限に達したため、形のみ空にしました（レポート本体は完全）: {shapeless.toList.take 5}{if shapeless.size > 5 then " …" else ""}"
-        unless skipped.isEmpty do
-          IO.eprintln s!"警告: {skipped.size} 件の宣言を実行時例外により解析できず飛ばしました: {skipped.toList.take 5}{if skipped.size > 5 then " …" else ""}"
-        /- モジュールシステムの対象を素の import で読むと、定理の証明項が省略され
-           値依存・valueSize が空になる。「黙って不完全な解析結果」を出さないため、
-           証明項を辿れない定理を検出したら stderr で警告する
-           （非モジュールの対象では定理は必ず証明項を持つので、誤警告は出ない）。 -/
-        unless parsed.importAll do
-          let elided := reports.filter fun r => r.kind == "theorem" && r.valueSize == 0
-          unless elided.isEmpty do
-            IO.eprintln s!"警告: 証明項を辿れない定理が {elided.size} 件あります。対象がモジュールシステム（module ヘッダ）を使っている場合、値依存の分析が不完全です。--import-all を付けて再実行してください"
-        for r in reports do
-          IO.println (declReportToJsonLine r "target")
-        /- 対象から直接参照されている外部の宣言も、型と種別だけは出す。
-           名前しか無いと `Entails.trans` のような本当の前提が
-           「型の分からないもの」に落ち、補題と語彙の区別がつかなくなる。
-           出すのは直接参照の一段だけなので件数は多くない。 -/
-        let inSet := names.foldl (fun (s : NameSet) n => s.insert n) {}
-        let extNames := reports.foldl (init := ({} : NameSet)) fun s r =>
-          let s := r.typeDeps.foldl (fun s d => if inSet.contains d then s else s.insert d) s
-          r.valueDeps.foldl (fun s d => if inSet.contains d then s else s.insert d) s
-        let extArr := nameArray extNames
-        let (extReports, extShapeless, extSkipped) ← collectAllReports env extArr parsed.valueChars coreCtx coreState
-        unless extShapeless.isEmpty do
-          IO.eprintln s!"注記: 外部参照 {extShapeless.size} 件で形の判定を諦めました（本体は完全）"
-        unless extSkipped.isEmpty do
-          IO.eprintln s!"警告: 外部参照 {extSkipped.size} 件を実行時例外により解析できず飛ばしました"
-        for r in extReports do
-          IO.println (declReportToJsonLine r "external")
-      return 0
+    /- 環境は拡張まで読み込む（`loadExts := true`）。
+       `withImportModules` は常に `loadExts := false` で環境を作る（core の定義で確認）。
+       その環境では `finalizePersistentExtensions` が走らず、インスタンス表や記法の
+       unexpander が初期値のまま空になる。結果として `isInstance` が全宣言で偽、
+       pretty print が記法なしの前置形（`Eq (…) (…)`、`instHMul.hMul a b`）になった
+       （自己解析で実測）。docString・行範囲・可簡約性・公理表はモジュール項目を
+       直接二分探索するので影響を受けず、これが「一部だけ効く」症状の正体。
+       拡張の初期化は interpreter を使い得るので、先に `enableInitializersExecution`
+       を呼ぶ（実行ファイルは `supportInterpreter := true`）。その場合、圧縮領域を
+       解放してはならない（core の注意書き）ので `leakEnv := true` とし、
+       プロセス終了まで環境を保持する。 -/
+    enableInitializersExecution
+    let env ← importModules imports {} (leakEnv := true) (loadExts := true)
+    let coreCtx : Core.Context := { fileName := "<decl_report>", fileMap := default }
+    let coreState : Core.State := { env }
+    match parsed.minimal? with
+    | some root =>
+      let (text, _) ← (runMinimalReport env root).toIO coreCtx coreState
+      IO.println text
+    | none =>
+      let names := targetDeclNames env parsed.modules
+      let (reports, shapeless, skipped) ← collectAllReports env names parsed.valueChars coreCtx coreState
+      unless shapeless.isEmpty do
+        IO.eprintln s!"注記: {shapeless.size} 件の宣言で形の判定（defeq）が heartbeat 上限に達したため、形のみ空にしました（レポート本体は完全）: {shapeless.toList.take 5}{if shapeless.size > 5 then " …" else ""}"
+      unless skipped.isEmpty do
+        IO.eprintln s!"警告: {skipped.size} 件の宣言を実行時例外により解析できず飛ばしました: {skipped.toList.take 5}{if skipped.size > 5 then " …" else ""}"
+      /- モジュールシステムの対象を素の import で読むと、定理の証明項が省略され
+         値依存・valueSize が空になる。「黙って不完全な解析結果」を出さないため、
+         証明項を辿れない定理を検出したら stderr で警告する
+         （非モジュールの対象では定理は必ず証明項を持つので、誤警告は出ない）。 -/
+      unless parsed.importAll do
+        let elided := reports.filter fun r => r.kind == "theorem" && r.valueSize == 0
+        unless elided.isEmpty do
+          IO.eprintln s!"警告: 証明項を辿れない定理が {elided.size} 件あります。対象がモジュールシステム（module ヘッダ）を使っている場合、値依存の分析が不完全です。--import-all を付けて再実行してください"
+      for r in reports do
+        IO.println (declReportToJsonLine r "target")
+      /- 対象から参照される宣言を二種に分けて出す。
+         - 対象モジュール内の内部補助（`_proof_*` / `match_*` 等。`isInternalDetail` で
+           対象一覧からは外れる）は対象の一部なので、その依存まで辿る（internal）。
+           そうしないと omega 等が生成した補助定理の中身（公理の出どころ）がスタブに
+           落ち、導出図から消える（自己解析で `double_eq._proof_1_1` に実測）。
+         - 対象の外の宣言は、型と種別だけは欲しいので一段だけ出す（external）。
+           名前しか無いと `Entails.trans` のような本当の前提が「型の分からないもの」に
+           落ち、補題と語彙の区別がつかなくなる。 -/
+      let inSet := names.foldl (fun (s : NameSet) n => s.insert n) {}
+      let inTargetModule (n : Name) : Bool :=
+        parsed.modules.any fun t => t.isPrefixOf (moduleOf env n)
+      let mut internal : NameSet := {}
+      let mut external : NameSet := {}
+      let mut queue : Array Name := #[]
+      for r in reports do
+        queue := queue ++ r.typeDeps ++ r.valueDeps
+      let mut i := 0
+      while i < queue.size do
+        let n := queue[i]!
+        i := i + 1
+        if inSet.contains n || internal.contains n || external.contains n then
+          continue
+        if inTargetModule n then
+          internal := internal.insert n
+          queue := queue ++ nameArray (directDepsOfCore env n).all
+        else
+          external := external.insert n
+      let (intReports, intShapeless, intSkipped) ←
+        collectAllReports env (nameArray internal) parsed.valueChars coreCtx coreState
+      let (extReports, extShapeless, extSkipped) ←
+        collectAllReports env (nameArray external) parsed.valueChars coreCtx coreState
+      unless intShapeless.isEmpty && extShapeless.isEmpty do
+        IO.eprintln s!"注記: 内部補助 {intShapeless.size} 件・外部参照 {extShapeless.size} 件で形の判定を諦めました（本体は完全）"
+      unless intSkipped.isEmpty && extSkipped.isEmpty do
+        IO.eprintln s!"警告: 内部補助 {intSkipped.size} 件・外部参照 {extSkipped.size} 件を実行時例外により解析できず飛ばしました"
+      for r in intReports do
+        IO.println (declReportToJsonLine r "internal")
+      for r in extReports do
+        IO.println (declReportToJsonLine r "external")
+    return 0
 
 end LeanDeclReport
 

@@ -41,6 +41,9 @@
   .resizer::after { content:""; position:absolute; inset:0 2px; background:transparent; }
   .resizer:hover::after, .resizer.on::after { background:#6366f1; }
   .noselect, .noselect * { user-select: none !important; }
+  /* 左の一覧のガイド線（入れ子）。行ごとの部品として描く。色は行側の inline で上書きする */
+  .gl { position: absolute; border: 0 solid #d6d3d1; pointer-events: none; box-sizing: border-box; }
+  .dark .gl { border-color: #44403c; }
   /* 集中表示では操作列を消さず、キャンバスの上に浮かせて残す。
      必要な操作まで消えてしまうと、集中どころか手が止まる。 */
   #toolRow.focus-min {
@@ -89,14 +92,15 @@
         <input id="search" type="text" placeholder="検索  ( / )"
           class="w-full h-9 px-3 text-[12.5px] rounded-md bg-stone-100 dark:bg-stone-800
                  border border-transparent focus:border-indigo-400 focus:bg-white dark:focus:bg-stone-900 outline-none">
-        <div id="auditBar" class="flex flex-wrap gap-1"></div>
-        <div id="segList" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800"></div>
-        <div id="metricWrap" class="hidden space-y-1">
-          <div id="segMetric" class="flex flex-wrap gap-0.5"></div>
-          <div class="text-[10px] text-stone-400 leading-snug">
-            <span class="font-medium">↑</span> の付いた尺度は依存順序と両立します。
-            昇順に読めば前提が必ず先に来ます。<span id="metricNote"></span>
-          </div>
+        <!-- 監査の統計（押せない）。押せる絞り込みは下の listFilters に分ける -->
+        <div id="auditBar" class="flex flex-wrap gap-1" title="対象の宣言についての統計"></div>
+        <div class="flex items-center gap-2">
+          <span class="text-[11px] text-stone-400 shrink-0">並べ方</span>
+          <div id="segList" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800"></div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-[11px] text-stone-400 shrink-0">絞り込み</span>
+          <div id="listFilters" class="flex flex-wrap gap-1"></div>
         </div>
       </div>
       <div class="px-2.5 pt-2 pb-1 flex items-center justify-between shrink-0">
@@ -129,21 +133,9 @@
           <input id="depthRange" type="range" min="1" max="3" step="1" value="1" class="w-16">
           <span id="depthVal" class="w-2">1</span>
         </label>
-        <button id="btnSphere" class="px-2 py-1 rounded-md text-[12px] border border-stone-300 dark:border-stone-600
-                hover:bg-stone-100 dark:hover:bg-stone-800 shrink-0"
-                title="部分グラフごとに扇をまるごと与え、経度で切り替える (b)">球面</button>
         <button id="btnFocus" class="px-2 py-1 rounded-md text-[12px] border border-stone-300 dark:border-stone-600
                 hover:bg-stone-100 dark:hover:bg-stone-800 shrink-0"
                 title="中央と右パネルだけにする (f)">集中</button>
-        <!-- 球面モードのとき、いまどの区画に止まっているかを常に示す。
-             経度は等分なので ◀ ▶ の一押しは常に同じ角度。 -->
-        <span id="spinBar" class="hidden items-center gap-1 shrink-0 pl-1">
-          <button data-spin="-1" class="w-7 h-7 rounded-md hover:bg-stone-200 dark:hover:bg-stone-700 text-[13px]"
-                  title="前の区画へ ( [ )">◀</button>
-          <span id="spinLabel" class="text-[12px] tabular-nums min-w-[7.5rem] text-center"></span>
-          <button data-spin="1" class="w-7 h-7 rounded-md hover:bg-stone-200 dark:hover:bg-stone-700 text-[13px]"
-                  title="次の区画へ ( ] )">▶</button>
-        </span>
         <button id="btnCollapse" class="hidden px-2 py-1 rounded-md text-[11.5px] shrink-0
                 bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 dark:hover:bg-stone-600"></button>
 
@@ -251,8 +243,23 @@
             <span style="color:#C2410C">╌</span> 証明で参照<span class="text-stone-400">（下・中心を使う側）</span></div>
           <div>単クリック 選択（移動しない） / ダブルクリック 移動</div>
           <div>ℓ は中心からの最長導出鎖の長さ</div>
-          <div>球面モードでは地球儀を掴んで回すと正面の区画が変わる（Shift+ホイールでも）</div>
-          <div><kbd>/</kbd>検索 <kbd>t</kbd>型のみ <kbd>m</kbd>粒度 <kbd>v</kbd>下錐 <kbd>b</kbd>球面 <kbd>p</kbd>ピン <kbd>0</kbd>全体 <kbd>f</kbd>集中</div>
+          <div class="pt-1 border-t border-stone-200 dark:border-stone-700">左の一覧: ▾ で枝を畳む。線は枝の範囲、藍の線は中心か選択を含む枝、
+            色のレールは名前空間。上端に固定される見出しを押すとそこへ戻る。薄い字は名前空間、濃い字が宣言名。</div>
+          <div><b>派生</b>: 由来（構造体・構成子・定義）から Lean が機械的に作る宣言（casesOn / mk.inj / sizeOf_spec / eq_1 …）。
+            既定では由来の行とグラフの節点に畳み、辺には「単射性」等の経由の札を付ける。
+            グラフの札 <b>+k</b> は「この中心から見える派生の数」（0 なら薄い。開いても図は変わらず、一覧で見る）、
+            <b>−n</b> は開いている、<b>▾n</b> は固定で開いている（中心が派生、または経路表示の区間に派生があるとき。押しても閉じない）。
+            一覧の「派生を全て開く」は全ての由来を開く／畳む操作で、個別の開閉と同じ集合を動かす。</div>
+          <div><b>断片</b>: 証明・本体から切り出された補助（_proof_1 / match_1）。由来に埋め戻し、節点には出さない。
+            <b>骨組み</b>: 論理結合子（And.intro / Eq.mpr）。「表示 ▾」で通り抜けを切り替える。</div>
+          <div><b>経路</b>: 極小元のチップや公理のチップを押すと、中心からそこへ至る順序区間 [t, c] = ↑t ∩ ↓c を
+            元の依存グラフで取り、区間に含まれる派生の由来を自動で開いて強調する（畳んだ派生の中だけを通る経路でも反応する）。</div>
+          <div><b>パッケージ</b>: 対象の外の宣言は縁の色で出どころ（<span style="color:#0284C7">Mathlib</span>
+            <span style="color:#16A34A">cslib</span> <span style="color:#78716C">core</span> …）を示す。凡例はグラフ左上。
+            「束ね」で「パッケージ」を選ぶと上の錐がパッケージごとの扇になる。右パネルの 📘 docs は公式ドキュメントの宣言ページへ直接飛ぶ。</div>
+          <div><b>右パネル</b>: 主語は一つ（「追従」なら選択中の宣言、「中心固定」ならグラフの中心）。
+            依存・参照のタブもその宣言について出す。中央の見出しは常にグラフの中心。</div>
+          <div><kbd>/</kbd>検索 <kbd>t</kbd>型のみ <kbd>m</kbd>粒度 <kbd>v</kbd>下錐 <kbd>p</kbd>ピン <kbd>0</kbd>全体 <kbd>f</kbd>集中</div>
         </div>
       </details>
     </aside>
@@ -302,6 +309,7 @@
 
 <script src="js/graph.js"></script>
 <script src="js/sig.js"></script>
+<script src="js/pkg.js"></script>
 <script src="js/roles.js"></script>
 <script src="js/sample.js"></script>
 <script src="js/persist.js"></script>

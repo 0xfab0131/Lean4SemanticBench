@@ -46,24 +46,31 @@ elab "#minimal_deps " id:ident d:(num)? : command => do
     pure r
   logInfo (toString report)
 
-/-- 複数宣言をキャッシュ共有のまま処理する（`MetaM` 上の本体）。 -/
-def batchReports (env : Environment) (names : Array Name) : MetaM (Array DeclReport) := do
+/-- 複数宣言をキャッシュ共有のまま処理する（`MetaM` 上の本体）。
+    解析できなかった宣言は黙って落とさず、第二成分で呼び出し元へ返す
+    （Main.collectAllReports と同じ方針）。 -/
+def batchReports (env : Environment) (names : Array Name) : MetaM (Array DeclReport × Array Name) := do
   -- 明示的な `CacheM` 注釈は Main.collectAllReports と同じ理由
   -- (無名 do ブロックはモナド推論が elaborator の版に依存する)。
-  let collect : CacheM (Array DeclReport) := do
+  let collect : CacheM (Array DeclReport × Array Name) := do
     let mut acc : Array DeclReport := #[]
+    let mut skipped : Array Name := #[]
     for n in names do
-      if let some ci := env.find? n then
-        try acc := acc.push (← analyzeDecl env ci) catch _ => pure ()
-    return acc
-  let (out, _) ← collect.run ({} : Caches)
-  return out
+      match env.find? n with
+      | none    => skipped := skipped.push n
+      | some ci =>
+        try acc := acc.push (← analyzeDecl env ci) catch _ => skipped := skipped.push n
+    return (acc, skipped)
+  let ((out, skipped), _) ← collect.run ({} : Caches)
+  return (out, skipped)
 
 /-- `#decl_report_batch [foo, bar, baz]` : Markdown 表で一覧出力。 -/
 elab "#decl_report_batch " "[" ids:ident,* "]" : command => do
   let env ← getEnv
   let names ← ids.getElems.mapM fun id => liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
-  let reports ← liftTermElabM (batchReports env names)
+  let (reports, skipped) ← liftTermElabM (batchReports env names)
+  unless skipped.isEmpty do
+    logWarning m!"解析できず飛ばした宣言: {skipped.toList}"
   let header :=
     "| name | kind | isProp | 明示/暗黙/inst | sorry | 公理数 | 型依存 | 値依存 |\n" ++
     "|---|---|---|---|---|---|---|---|\n"

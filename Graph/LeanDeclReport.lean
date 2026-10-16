@@ -9,7 +9,7 @@
 
   `LeanDeclReport.Main` はこのライブラリには入れない。あれは実行ファイル
   `decl_report` のルートであって、ライブラリとして import される対象ではない
-  （`unsafe def main` を持ち、`Lean.withImportModules` で別環境を立ち上げる）。
+  （`unsafe def main` を持ち、`Lean.importModules (loadExts := true)` で別環境を立ち上げる）。
 -/
 import LeanDeclReport.Basic
 import LeanDeclReport.Commands

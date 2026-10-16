@@ -4,12 +4,18 @@
    証明項に現れる定数を一列に並べても、それは証明の図ではない。
    数学者が読みたいのは「どの既知の結果を使ってこれが出たか」であって、
    `Prod.fst` や `Iff.mpr` がそこに混ざっていると本筋が埋もれる。
-   三つに分ける。
+   四つに分ける。
 
      lemma  既に証明された言明。導出図の前提になる。isProp が真のもの。
      vocab  主張を書くための語彙。定義・型。isProp が偽のもの。
-     frame  論理の骨組み。連言・選言・存在・等式の構成子と除去子、
-            再帰子、内部生成された補助宣言。読み手が確認する対象ではない。
+     frame  論理の骨組み。連言・選言・存在・等式の構成子と除去子。
+            読み手が確認する対象ではない。core の論理結合子に限る（名前の一覧）。
+     part   断片。`_proof_<i>` / `match_<i>` のように、ある宣言の証明・本体の一部を
+            切り出したもの（レポートの originRel = "part"）。由来の中身として通り抜ける。
+
+   派生（originRel = "facet"。`mk.inj` / `casesOn` 等）は骨組みではない。
+   `pair_inj` の前提は `mk.inj`（単射性）であり、導出図ではそのまま前提として残す。
+   由来による畳み込みはグラフ側（graph.effectiveNodes）の仕事で、ここでは扱わない。
 
    公理だけは骨組みに見えても決して畳まない。`propext` や `Classical.choice`
    がここに紛れて消えるようなことがあってはならない。
@@ -36,24 +42,21 @@
     "Function.comp", "Membership.mem", "Setoid",
   ]);
 
-  /* 名前の形で分かる自動生成物。再帰子・場合分け・内部補助。
-     .ctorIdx は構造体ごとに生成される構成子番号（自己解析で検出し追加）。 */
-  const FRAME_SUFFIX = /(\.rec|\.recOn|\.casesOn|\.brecOn|\.below|\.ndrec|\.noConfusion|\.noConfusionType|\.ctorIdx|\.injEq|\.sizeOf|\.sizeOf_spec|\.mk\.injEq)$/;
-  const FRAME_INTERNAL = /(^_|\._|\.match_\d|\.proof_\d|\.eq_\d|\.eq_def|\.congr_|\.«)/;
-
+  /* 骨組みは core の論理結合子の一覧だけで決める。生成物・内部補助は名前では判定しない
+     （由来 originRel がレポートに入っている。旧形式は graph.legacyOrigin が補う）。 */
   function isFrameName(name) {
-    const n = String(name || "");
-    return FRAME_NAMES.has(n) || FRAME_SUFFIX.test(n) || FRAME_INTERNAL.test(n);
+    return FRAME_NAMES.has(String(name || ""));
   }
 
   /**
    * 役割を返す。node は store の nodes の要素（無くても名前だけで判定する）。
-   *   "axiom" | "lemma" | "vocab" | "frame"
+   *   "axiom" | "lemma" | "vocab" | "frame" | "part"
    */
   function roleOf(name, node) {
     const nd = node || {};
     if (nd.kind === "axiom") return "axiom";          // 公理は決して畳まない
     if (isFrameName(name)) return "frame";
+    if (nd.originRel === "part" && nd.origin) return "part";
     if (nd.isProp) return "lemma";
     return "vocab";
   }
@@ -62,23 +65,43 @@
     axiom: { ja: "公理",  c: "#EA580C", note: "これ以上遡れない仮定" },
     lemma: { ja: "補題",  c: "#4F46E5", note: "既に証明された言明。導出の前提" },
     vocab: { ja: "語彙",  c: "#0D9488", note: "主張を書くための定義・型" },
-    frame: { ja: "骨組み", c: "#A8A29E", note: "論理結合子・再帰子・内部生成物" },
+    frame: { ja: "骨組み", c: "#A8A29E", note: "論理結合子（And.intro / Eq.mpr …）" },
+    part:  { ja: "断片",  c: "#A8A29E", note: "ある宣言の証明・本体から切り出された一部（_proof_<i> / match_<i>）" },
   };
 
   /**
-   * 一つの宣言の直接依存を役割ごとに仕分ける。
+   * 一つの宣言の依存を役割ごとに仕分ける。
    * `via` は型に現れたか値に現れたかで、前者は主張を、後者は証明を支えている。
+   *
+   * 骨組みと断片は **通り抜ける**。`double_eq` の証明が `_proof_1_1`（omega が切り出した
+   * 断片）だけを直接呼ぶとき、その中で使われた補題や公理は `_proof_1_1` の依存にある。
+   * 直接依存だけを見ると前提が空になり、公理チップとの矛盾が生じる（自己解析で実測）。
+   * 断片は由来の証明の一部なので、その先の補題・公理を前提として拾う。`via` は初手を継承する。
+   * 直接の骨組み・断片だけを `frame` / `part` に数える（通り抜けた先は数えない）。
+   * 派生（`mk.inj` 等）は通り抜けない。それ自体が前提である。
    */
   function split(name, nodes) {
     const nd = nodes[name];
-    const out = { axiom: [], lemma: [], vocab: [], frame: [] };
+    const out = { axiom: [], lemma: [], vocab: [], frame: [], part: [] };
     if (!nd) return out;
-    const push = (d, via) => {
+    const seen = new Set([name]);
+    const visit = (d, via, direct) => {
+      if (seen.has(d)) return;
+      seen.add(d);
       const r = roleOf(d, nodes[d]);
-      if (!out[r].some((x) => x.name === d)) out[r].push({ name: d, via });
+      if (r === "frame" || r === "part") {
+        if (direct) out[r].push({ name: d, via });
+        const c = nodes[d];
+        if (c) {
+          for (const x of c.typeDeps || []) visit(x, via, false);
+          for (const x of c.valueDeps || []) visit(x, via, false);
+        }
+        return;
+      }
+      out[r].push({ name: d, via });
     };
-    for (const d of nd.typeDeps || []) push(d, "type");
-    for (const d of nd.valueDeps || []) push(d, "value");
+    for (const d of nd.typeDeps || []) visit(d, "type", true);
+    for (const d of nd.valueDeps || []) visit(d, "value", true);
     return out;
   }
 

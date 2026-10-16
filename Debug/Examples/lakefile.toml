@@ -1,0 +1,19 @@
+name = "Examples"
+version = "0.1.0"
+defaultTargets = ["examples"]
+
+# お題: cslib の暗号プロトコル（Commitment / SecretSharing）を解析する。
+# cslib は Mathlib v4.35.0 に依存し、全ファイルがモジュールシステムで書かれている。
+# lean-toolchain は cslib と同じ v4.35.0（Mathlib と Lean は版が噛み合っていないと壊れる）。
+# 取得: lake update cslib → lake exe cache get（Mathlib のビルド済み成果物）
+[[require]]
+name = "cslib"
+scope = "leanprover"
+rev = "main"
+
+[[lean_lib]]
+name = "Examples"
+
+[[lean_exe]]
+name = "examples"
+root = "Main"

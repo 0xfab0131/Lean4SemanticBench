@@ -23,6 +23,25 @@ if (!fs.existsSync(src) || fs.statSync(src).size === 0) {
 const text = fs.readFileSync(src, "utf8");
 const lines = text.split("\n").filter((l) => l.trim()).length;
 
+/* sample.js はフィクスチャ（Examples）の小さなレポートでなければならない。
+   `make all TARGET=Debug/Examples MODULES="Cslib.…"` のように同じ衛星で別の対象を解析すると、
+   既定の入力（.l4sb/report.jsonl）がその対象で上書きされる（cslib の 603 行・1 MB で実際に起きた）。
+   来歴（report.meta.json）の対象モジュールが Examples で始まらなければ止める。
+   意図してそうしたい場合だけ --force。 */
+const force = process.argv.includes("--force");
+const metaPath = src.replace(/\.jsonl$/, ".meta.json");
+if (!force && fs.existsSync(metaPath)) {
+  try {
+    const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+    const mods = Array.isArray(meta.modules) ? meta.modules : [];
+    if (mods.length && !mods.every((m) => String(m).startsWith("Examples"))) {
+      console.error(`来歴の対象 ${mods.join(" ")} はフィクスチャ（Examples）ではありません。sample.js を上書きしません`);
+      console.error("  フィクスチャを解析し直す: make all TARGET=Debug/Examples   （意図的に上書きするなら --force）");
+      process.exit(1);
+    }
+  } catch (e) { /* 来歴が読めなければ検査できない。レポートの中身で続ける */ }
+}
+
 const body =
   "/* ============================================================\n" +
   "   js/sample.js — 動作確認用のサンプル\n" +

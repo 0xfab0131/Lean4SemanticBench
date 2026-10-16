@@ -4,3 +4,5 @@ report.jsonl
 report.meta.json
 # report.jsonl を Web へ埋め込んだ生成物(make_default_report.js が作る)
 Web/js/default-report.js
+Web/js/sample.js
+

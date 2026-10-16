@@ -64,32 +64,7 @@
   };
 
   let p, host, anim = {}, fitK = 1, hitBoxes = [], lastClick = 0, lastClickName = null;
-  let drag = null, globeRect = null, globeDrag = null;
-  /* 回転は自由に動かせるが、手を離したら最寄りの区画へ寄って止まる。
-     途中の角度で止まると、どの区画も半端に傾いたまま読めなくなる。
-     phiAnim が実際に描く角度で、state.phi が目標。 */
-  let phiAnim = 0, snapTimer = 0;
-
-  const wrapPi = (d) => {
-    while (d > Math.PI) d -= 2 * Math.PI;
-    while (d < -Math.PI) d += 2 * Math.PI;
-    return d;
-  };
-
-  function snapToNearest() {
-    const dv = S.derived, st = S.state;
-    if (!st.view3d || !dv.sectors || !dv.sectors.length) return;
-    let best = null, bestAbs = Infinity;
-    for (const s of dv.sectors) {
-      const d = Math.abs(wrapPi(s.lon - st.phi));
-      if (d < bestAbs) { bestAbs = d; best = s; }
-    }
-    if (best) S.actions.spinTo(best.lon);
-  }
-  const scheduleSnap = (ms) => {
-    clearTimeout(snapTimer);
-    snapTimer = setTimeout(snapToNearest, ms);
-  };
+  let drag = null;
 
   const isDark = () => document.documentElement.classList.contains("dark");
   const pal = () => (isDark() ? PAL.dark : PAL.light);
@@ -161,7 +136,7 @@
       const st = S.state, dv = S.derived, c = pal();
       pp.clear();
       pp.background(c.bg);
-      if (!dv.posAll || !dv.center) return;
+      if (!dv.posAll || !dv.center) { pp.noLoop(); return; }   // 描くものが無いときも眠る
 
       const W = pp.width, H = pp.height;
       fitK = fitScale(dv, W, H);
@@ -190,18 +165,6 @@
       const hl = dv.highlight, hov = st.hovered, cen = dv.center;
       const path = dv.pathSet;      // 選んだノードから中心までの経路
       const NH = S.NODE_H;
-
-      if (st.view3d) {
-        // 目標角へ滑らかに寄せる。極小元の経路表示と同じ「押すと落ち着く」感覚に揃える
-        phiAnim += wrapPi(st.phi - phiAnim) * 0.16;
-        if (Math.abs(wrapPi(st.phi - phiAnim)) < 0.002) phiAnim = st.phi;
-        drawSpherical(pp, st, dv, c, W, H, k, live, hl, hov, path, cen, NH);
-        drawLegend(pp, c, dv, W, H);
-        drawGlobe(pp, c, dv, st, W, H);
-        drawHoverCard(pp, c, dv, st, W, H);
-        maybeSleep(animDelta);
-        return;
-      }
 
       pp.push();
       pp.translate(W / 2 + st.view.tx, H / 2 + st.view.ty);
@@ -303,6 +266,7 @@
             pp.line(3.8 / k, -6.6 / k, 0, 0.6 / k);
           }
           pp.pop();
+          if (e.via && e.via.length && !dim) drawViaLabel(pp, c, ax + dx * (t0 + t1) / 2, ay + dy * (t0 + t1) / 2, viaText(st, e.via), k);
           pp.drawingContext.globalAlpha = 1;
           continue;
         }
@@ -341,6 +305,10 @@
           pp.line(3.8 / k, -6.6 / k, 0, 0.6 / k);
         }
         pp.pop();
+        if (e.via && e.via.length && !dim) {
+          const q = polar(rB - 22 / Math.max(k, 0.4), B.th);
+          drawViaLabel(pp, c, q.x, q.y, viaText(st, e.via), k);
+        }
         pp.drawingContext.globalAlpha = 1;
       }
 
@@ -355,13 +323,21 @@
         pp.drawingContext.globalAlpha = (dim ? c.dim : 1) * a.o;
 
         const onPath = path && path.has(n);
+        const nd = st.nodes[n];
+        /* 外部の宣言（対象の外で定義されたもの）とモジュール粒度の節点は、縁をパッケージの色に
+           する（Mathlib / cslib / core …。pkg.colorOf）。どのパッケージに依っているかが
+           図の上で読める。対象のパッケージの節点は既定の縁のまま。 */
+        const pkgC = pkgColorOf(n, nd, st);
         pp.fill(stl.bg);
-        pp.stroke(isSel ? c.center : onPath ? CONE[a.cone].wash : isHov ? CONE[a.cone].wash : stl.bd);
-        pp.strokeWeight((isSel ? 2.4 : onPath ? 2.2 : isHov ? 2 : 1.1) / k);
+        pp.stroke(isSel ? c.center : onPath ? CONE[a.cone].wash : isHov ? CONE[a.cone].wash : (pkgC || stl.bd));
+        pp.strokeWeight((isSel ? 2.4 : onPath ? 2.2 : isHov ? 2 : pkgC ? 1.6 : 1.1) / k);
         pp.rect(a.x - w / 2, a.y - h / 2, w, h, stl.pill ? h / 2 : 9);
 
-        const nd = st.nodes[n];
         const dotC = KIND_DOT[st.granularity === "module" ? "unknown" : (nd ? nd.kind : "unknown")] || KIND_DOT.unknown;
+        /* 派生の札。畳んでいれば「+k」（k = この中心から見える派生の数。facetReach）、
+           開いていれば「−n」（n = 由来の派生の総数）。押すと開閉（一覧の小枝と同じ状態）。 */
+        const fc = st.granularity === "decl" && dv.facetCount ? (dv.facetCount[n] || 0) : 0;
+        const badgeW = fc ? 24 : 0;
         pp.noStroke(); pp.fill(dotC);
         if (w < 78) {
           pp.circle(a.x, a.y, 9);
@@ -369,7 +345,7 @@
           pp.circle(a.x - w / 2 + 14, a.y, 8);
           pp.fill(stl.tx); pp.textSize(13);
           pp.textAlign(pp.LEFT, pp.CENTER);
-          pp.text(fit(pp, (dv.labels && dv.labels[n]) || n, w - 32), a.x - w / 2 + 24, a.y + 0.5);
+          pp.text(fit(pp, (dv.labels && dv.labels[n]) || n, w - 32 - badgeW), a.x - w / 2 + 24, a.y + 0.5);
         }
 
         // 展開バッジは半径方向の外側。ノード幅が細っても必ず押せる。
@@ -386,6 +362,9 @@
           hitBoxes.push({ kind: "expand", name: n, x: q.x - bw / 2, y: q.y - 9.5, w: bw, h: 19 });
         }
         hitBoxes.push({ kind: "node", name: n, x: a.x - w / 2, y: a.y - h / 2, w, h });
+        /* 派生の札はノードの矩形の内側にあるので、当たり判定はノードの後に積む
+           （後から積んだものが優先。先に積むと押してもノードの選択になる。実障害）。 */
+        if (fc) drawClusterBadge(pp, c, dv, n, fc, a.x + w / 2 - 25, a.y - 8, stl.bd, k, (dim ? c.dim : 1) * a.o);
         pp.drawingContext.globalAlpha = 1;
       }
 
@@ -395,14 +374,16 @@
       pp.circle(0, 0, S.GEO.r0 * 0.62);
       pp.fill(c.center); pp.stroke(c.center); pp.strokeWeight(1 / k);
       pp.rect(-cw / 2, -ch / 2, cw, ch, 11);
+      const cfc = st.granularity === "decl" && dv.facetCount ? (dv.facetCount[cen] || 0) : 0;
       pp.noStroke(); pp.fill(c.centerTx); pp.textSize(14.5);
       pp.textAlign(pp.CENTER, pp.CENTER);
-      pp.text(fit(pp, (dv.labels && dv.labels[cen]) || cen, cw - 18), 0, 0.5);
+      pp.text(fit(pp, (dv.labels && dv.labels[cen]) || cen, cw - 18 - (cfc ? 26 : 0)), cfc ? -13 : 0, 0.5);
       hitBoxes.push({ kind: "node", name: cen, x: -cw / 2, y: -ch / 2, w: cw, h: ch });
+      if (cfc) drawClusterBadge(pp, c, dv, cen, cfc, cw / 2 - 27, -8, c.centerRing, k, 1);
 
       pp.pop();
 
-      drawLegend(pp, c, dv, W, H);
+      drawLegend(pp, c, dv, st, W, H);
       drawHoverCard(pp, c, dv, st, W, H);
       maybeSleep(animDelta);
     };
@@ -411,9 +392,60 @@
        純粋な CPU/バッテリーの浪費になる。入力(マウス)と状態変化(subscribe)で
        再開するので、見た目の応答は変わらない。 */
     function maybeSleep(animDelta) {
-      const st = S.state;
-      const spinning = st.view3d && Math.abs(wrapPi(st.phi - phiAnim)) > 0.002;
-      if (animDelta < 0.5 && !spinning && !drag && !globeDrag) pp.noLoop();
+      if (animDelta < 0.5 && !drag) pp.noLoop();
+    }
+
+    /* 派生の札。
+         +k   畳んでいる。k はこの中心から見える派生の数（開けば現れる）。0 なら薄く描く
+              （開いても図は変わらない。一覧では由来の下に全て出る）。
+         −n   開いている。n は由来の派生の総数。
+         ▾n   強制的に開いている（中心が派生／経路表示の区間に派生）。押しても閉じない。
+       押すと開閉（一覧の小枝と同じ状態）。 */
+    function drawClusterBadge(pp, c, dv, name, fc, x, y, bd, k, alpha) {
+      const open = S.isClusterOpen(name), forced = S.isClusterForced(name);
+      const reach = dv.facetReach ? (dv.facetReach[name] || 0) : fc;
+      const bw = 22, bh = 16;
+      const faint = !open && reach === 0;
+      pp.drawingContext.globalAlpha = alpha * (faint ? 0.45 : 1);
+      pp.fill(c.badgeBg); pp.stroke(forced ? c.center : bd); pp.strokeWeight((forced ? 1.4 : 1) / k);
+      pp.rect(x, y, bw, bh, 8);
+      pp.noStroke(); pp.fill(forced ? c.center : c.badgeTx); pp.textSize(10);
+      pp.textAlign(pp.CENTER, pp.CENTER);
+      pp.text(forced ? "▾" + fc : open ? "−" + fc : "+" + reach, x + bw / 2, y + bh / 2 + 0.5);
+      pp.drawingContext.globalAlpha = alpha;
+      hitBoxes.push({ kind: "cluster", name, x, y, w: bw, h: bh });
+    }
+
+    /* パッケージの縁の色。対象のパッケージ（レポートの対象モジュールのもの）は無色。 */
+    function pkgColorOf(n, nd, st) {
+      const P = LDR.pkg;
+      if (!P) return null;
+      if (st.granularity === "module") {
+        const p = P.packageOf(n);
+        return p && p !== targetPackage(st) ? P.colorOf(p) : null;
+      }
+      if (!nd || !nd.external) return null;
+      const p = P.packageOf(nd.module);
+      return p && p !== targetPackage(st) ? P.colorOf(p) : null;
+    }
+
+    /* 辺が畳まれた派生・断片を経由しているとき、その種類（単射性・場合分け…）を辺の
+       終点の手前に小さく書く。「pair_inj は mk を使う」ではなく「mk の単射性を使う」と読める。 */
+    function viaText(st, via) {
+      const K = LDR.sig.ORIGIN_KIND;
+      const kinds = [...new Set(via.map((g) => {
+        const nd = st.nodes[g];
+        return nd && K[nd.originKind] ? K[nd.originKind].ja : "経由";
+      }))];
+      return kinds.join("·") + (via.length > kinds.length ? ` ×${via.length}` : "");
+    }
+    function drawViaLabel(pp, c, x, y, text, k) {
+      pp.textSize(9.5 / k);
+      const w = pp.textWidth(text) + 8 / k, h = 13 / k;
+      pp.noStroke(); pp.fill(c.panel);
+      pp.rect(x - w / 2, y - h / 2, w, h, 4 / k);
+      pp.fill(c.faint); pp.textAlign(pp.CENTER, pp.CENTER);
+      pp.text(text, x, y + 0.5 / k);
     }
 
     /* ホバーした宣言の中身を、その場で読めるようにする。
@@ -433,7 +465,7 @@
       if (nd.module) sub.push(shortLabel(nd.module) + (nd.line ? ":" + nd.line : ""));
       if (nd.isInstance) sub.push("instance");
       if (nd.reducibility === "reducible") sub.push("reducible");
-      if (nd.shape && S2.SHAPE[nd.shape]) sub.push(S2.SHAPE[nd.shape].ja);
+      if (nd.isProp && nd.shape && S2.SHAPE[nd.shape]) sub.push(S2.SHAPE[nd.shape].ja);   // 形は命題にだけ
       sub.push(nd.numHyp || nd.numInst ? `条件 ${(nd.numHyp || 0) + (nd.numInst || 0)}` : "無条件");
       lines.push({ t: sub.join(" · "), s: 11, col: c.muted });
       lines.push({
@@ -443,6 +475,31 @@
         s: 11, col: c.muted,
       });
       if (nd.subject) lines.push({ t: "主題 " + S2.shortName(nd.subject), s: 11, col: c.faint, mono: true });
+      /* 由来。派生・断片なら「X の派生: 単射性」、由来を持つ側なら派生・断片の数。
+         経由: この節点に触れる辺が畳まれた派生を通っていれば、何を使ったかを列挙する。 */
+      const OK = S2.ORIGIN_KIND, OR = S2.ORIGIN_REL;
+      if (nd.originRel && nd.origin) {
+        lines.push({ t: `${S2.shortName(nd.origin)} の${(OR[nd.originRel] || {}).ja || nd.originRel}: ${(OK[nd.originKind] || {}).ja || nd.originKind}`, s: 11, col: c.faint });
+      }
+      const fc = dv.facetCount ? dv.facetCount[n] : 0, pc = dv.partCount ? dv.partCount[n] : 0;
+      if (fc || pc) {
+        const reach = dv.facetReach ? (dv.facetReach[n] || 0) : fc;
+        const how = S.isClusterForced(n) ? "固定で開いている（中心または経路の由来）"
+                  : S.isClusterOpen(n) ? "開いている"
+                  : reach ? `畳んでいる。この中心から見えるのは ${reach} 件、+${reach} で開く`
+                  : "畳んでいる。この中心の依存・参照の経路上には無い（一覧の由来の行で見る）";
+        lines.push({ t: (fc ? `派生 ${fc}（${how}）` : "") + (fc && pc ? "  " : "") + (pc ? `断片 ${pc}` : ""), s: 11, col: c.muted });
+      }
+      if (LDR.pkg && nd.external) {
+        const p = LDR.pkg.packageOf(nd.module);
+        if (p) lines.push({ t: `パッケージ ${LDR.pkg.labelOf(p)}（${nd.module}）`, s: 11, col: LDR.pkg.colorOf(p) });
+      }
+      const vias = [];
+      for (const e of dv.edges || []) {
+        if (!e.via || (e.u !== n && e.v !== n)) continue;
+        for (const g of e.via) vias.push(`${S2.shortName(g)}（${(OK[(st.nodes[g] || {}).originKind] || {}).ja || "経由"}）`);
+      }
+      if (vias.length) lines.push({ t: "経由 " + [...new Set(vias)].slice(0, 4).join(", ") + (vias.length > 4 ? " …" : ""), s: 11, col: c.faint });
 
       const concl = S2.abbrev(nd.conclusion || nd.typeString || "");
       const w = 430, padX = 11, padY = 9;
@@ -475,299 +532,28 @@
       pp.textAlign(pp.LEFT, pp.CENTER);
     }
 
-    /* ---------- 球面モード ----------
-
-       部分グラフごとに扇をまるごと与え、経度で切り替える。正面に来た区画だけが
-       読める大きさで描かれ、脇へ回った区画は水平に圧縮されて薄くなる。
-       一つの扇を全部で共有すると、どれも狭くなって重なる。それを避けるための構造。
-
-       中心は経度に依らず原点に固定する。層を行き来しても現在地を失わないため。 */
-    function sectorDepth(s, phi) { return Math.cos(s.lon - phi); }
-
-    /* `path`（選んだノードから中心までの経路）は必ず引数で受け取る。
-       draw のローカル変数はここからは見えない。以前これを取りこぼしていて、
-       最初の辺を描く時点で ReferenceError になり、球面モードが真っ白になっていた。 */
-    function drawSpherical(pp, st, dv, c, W, H, k, live, hl, hov, path, cen, NH) {
-      const phi = phiAnim;
-
-      /* 円筒に貼って回す。奥の区画は水平に圧縮するだけでなく、
-         sin で **横へ退かせる**。圧縮だけだと全部が中心線に重なって混ざる。
-         正面から 65 度より外は描かない。薄く重ねても読めないので、
-         そこは地球儀に任せる。 */
-      const SLIDE = Math.max(W * 0.86, 460);
-      const vis = dv.sectors
-        .map((s) => ({ s, dl: wrapPi(s.lon - phi) }))
-        .map((x) => Object.assign(x, { d: Math.cos(x.dl) }))
-        .filter((x) => x.d > 0.42)
-        .sort((a, b) => a.d - b.d);          // 奥から手前へ
-
-      // 正面はただ一つ。閾値で決めると複数が「正面」になり、ラベルが重なる。
-      let frontKey = null, best = Infinity;
-      for (const x of vis) if (Math.abs(x.dl) < best) { best = Math.abs(x.dl); frontKey = x.s.id; }
-
-      hitBoxes = [];
-
-      /* 薄い方の錐は回さず常に出す。9 件しかない上錐を部分グラフに割ると、
-         回すたびに片側が空になるだけで読みにくい。 */
-      const groupsToDraw = [];
-      for (const part of dv.pinned || []) {
-        groupsToDraw.push({ parts: [part], slide: 0, sq: 1, sc: 1, alpha: 1, front: true, hue: null });
-      }
-      for (const { s, dl, d } of vis) {
-        groupsToDraw.push({
-          parts: s.parts, slide: Math.sin(dl) * SLIDE,
-          sq: Math.max(0.12, d), sc: 0.72 + 0.28 * d,
-          alpha: s.id === frontKey ? 1 : Math.pow(d, 2.2) * 0.75,
-          front: s.id === frontKey, hue: hueOf(s.key),
-        });
-      }
-
-      for (const grp of groupsToDraw) {
-        const { slide, sq, sc, alpha, front } = grp;
-        const hue = grp.hue;
-
-        pp.push();
-        pp.translate(W / 2 + st.view.tx + slide, H / 2 + st.view.ty);
-        pp.scale(k * sc, k * sc);
-        pp.scale(sq, 1);
-
-        for (const part of grp.parts) {
-          const col = CONE[part.coneId] || CONE.dep;
-
-          pp.drawingContext.globalAlpha = alpha * 0.06;
-          pp.noStroke();
-          pp.fill(hue == null ? col.wash : `hsl(${hue},60%,50%)`);
-          pp.arc(0, 0, (part.rMax + 190) * 2, (part.rMax + 190) * 2, part.th0, part.th1, pp.PIE);
-
-          pp.drawingContext.globalAlpha = alpha * 0.5;
-          pp.noFill(); pp.stroke(c.ring); pp.strokeWeight(1 / (k * sc));
-          for (const ring of part.rings) pp.arc(0, 0, ring.r * 2, ring.r * 2, part.th0, part.th1);
-
-          if (front) {
-            pp.noStroke(); pp.fill(c.muted); pp.textSize(10.5 / (k * sc));
-            pp.textAlign(pp.CENTER, pp.CENTER);
-            pp.drawingContext.globalAlpha = 1;
-            for (const ring of part.rings) {
-              const q = polar(ring.r, part.th1 + 26 / (ring.r * k * sc));
-              const extra = part.overflow[ring.level] ? ` +${part.overflow[ring.level]}` : "";
-              pp.text(`ℓ${ring.level}${extra}`, q.x, q.y);
-            }
-          }
-
-          // 辺。経路表示と選択した流れは平面モードと同じ規則で強調する
-          for (const e of part.edges) {
-            const A = e.u === cen ? { r: 0, th: 0, level: 0 } : part.pos[e.u];
-            const B = part.pos[e.v];
-            if (!A || !B) continue;
-            const style = edgeStyle(e.cone, e.kind);
-            const dim = (hl && !(hl.has(e.u) && hl.has(e.v)));
-            const trace = hl && !dim;
-            const onPath = path && path.has(e.u) && path.has(e.v);
-            const hot = (hov && (e.u === hov || e.v === hov)) || onPath;
-            const thA = e.u === cen ? B.th : A.th;
-            const rA = e.u === cen ? NH * 1.05 : A.r + NH / 2;
-            pp.noFill();
-            pp.stroke(trace ? c.trace : edgeCol(style));
-            pp.strokeWeight(((hot || trace) ? 2.2 : front ? 1.25 : 1) / (k * sc));
-            pp.drawingContext.globalAlpha = dim ? alpha * c.dim
-              : alpha * ((hot || trace) ? 0.95 : front ? 0.5 : 0.3);
-            if (style.dash) pp.drawingContext.setLineDash(style.dash.map((v) => v / (k * sc)));
-            if (B.r - NH / 2 < rA + 6) {
-              // 非外向きの辺は実座標間の直線で(平面モードと同じ理由)
-              const A2 = e.u === cen ? { x: 0, y: 0 } : A;
-              const dx = B.x - A2.x, dy = B.y - A2.y, L = Math.hypot(dx, dy) || 1;
-              const t0 = Math.min(0.45, (NH / 2 + 4) / L);
-              const t1 = Math.max(t0 + 0.1, 1 - (NH / 2 + 4) / L);
-              pp.line(A2.x + dx * t0, A2.y + dy * t0, A2.x + dx * t1, A2.y + dy * t1);
-            } else {
-              const rB = Math.max(B.r - NH / 2, rA + 6);
-              const rM = (rA + rB) / 2;
-              const P0 = polar(rA, thA), P3 = polar(rB, B.th);
-              const C1 = polar(rM, thA), C2 = polar(rM, B.th);
-              pp.bezier(P0.x, P0.y, C1.x, C1.y, C2.x, C2.y, P3.x, P3.y);
-            }
-            pp.drawingContext.setLineDash([]);
-          }
-
-          // ノード。正面の区画だけラベルを出し、押せるようにする
-          for (const [n, p] of Object.entries(part.pos)) {
-            const stl = nodeStyle(n, st, dv);
-            const isSel = st.selected === n, isHov = hov === n;
-            const onPath = path && path.has(n);
-            const dim = hl && !hl.has(n);
-            const w = p.w, h = NH;
-            pp.drawingContext.globalAlpha = alpha * (dim ? c.dim : 1);
-            pp.fill(stl.bg);
-            pp.stroke(isSel ? c.center : (onPath || isHov) ? col.wash : stl.bd);
-            pp.strokeWeight((isSel ? 2.4 : onPath ? 2.2 : isHov ? 2 : 1.1) / (k * sc));
-            pp.rect(p.x - w / 2, p.y - h / 2, w, h, stl.pill ? h / 2 : 9);
-            const nd = st.nodes[n];
-            pp.noStroke();
-            pp.fill(KIND_DOT[(nd && nd.kind) || "unknown"] || KIND_DOT.unknown);
-            if (front && w >= 78) {
-              pp.circle(p.x - w / 2 + 14, p.y, 8);
-              pp.fill(stl.tx); pp.textSize(13);
-              pp.textAlign(pp.LEFT, pp.CENTER);
-              pp.text(fit(pp, (dv.labels && dv.labels[n]) || n, w - 32), p.x - w / 2 + 24, p.y + 0.5);
-            } else {
-              pp.circle(p.x, p.y, 9);
-            }
-
-            if (!front) continue;
-            const toScreen = (wx, wy, ww, hh) => ({
-              x: W / 2 + st.view.tx + slide + wx * k * sc * sq - (ww * k * sc * sq) / 2,
-              y: H / 2 + st.view.ty + wy * k * sc - (hh * k * sc) / 2,
-              w: ww * k * sc * sq, h: hh * k * sc,
-            });
-            const more = dv.more && dv.more[n];
-            const isExp = st.expanded.has(n);
-            if (more || isExp) {
-              const q = polar(p.r + h / 2 + 12, p.th);
-              const bw = isExp ? 24 : 16 + String(more).length * 7;
-              pp.fill(c.badgeBg); pp.stroke(stl.bd); pp.strokeWeight(1 / (k * sc));
-              pp.rect(q.x - bw / 2, q.y - 9.5, bw, 19, 9.5);
-              pp.noStroke(); pp.fill(c.badgeTx); pp.textSize(11);
-              pp.textAlign(pp.CENTER, pp.CENTER);
-              pp.text(isExp ? "－" : "+" + more, q.x, q.y + 0.5);
-              hitBoxes.push(Object.assign({ kind: "expand", name: n, screen: true },
-                toScreen(q.x, q.y, bw, 19)));
-            }
-            hitBoxes.push(Object.assign({ kind: "node", name: n, screen: true },
-              toScreen(p.x, p.y, w, h)));
-          }
-        }
-        pp.drawingContext.globalAlpha = 1;
-        pp.pop();
-      }
-
-      /* 正面の区画の名札。いまどこに止まっているのかが常に分かるようにする。
-         回している最中にどの区画が正面なのか分からないのが一番使いにくい。 */
-      const fs = vis.find((x) => x.s.id === frontKey);
-      if (fs) {
-        const s = fs.s;
-        const hue = hueOf(s.key);
-        const side = s.coneId === "dep" ? "上錐" : "下錐";
-        const cnt = s.parts.reduce((a, pt) => a + Object.keys(pt.pos).length, 0);
-        pp.noStroke(); pp.fill(`hsl(${hue},52%,${isDark() ? 70 : 36}%)`);
-        pp.textSize(13.5); pp.textAlign(pp.CENTER, pp.TOP);
-        pp.text(shortLabel(s.key), W / 2, 42);
-        pp.fill(c.muted); pp.textSize(10.5);
-        pp.text(`${side} ${cnt} 件   ${s.index + 1} / ${s.of} 区画`
-          + (dv.pinned && dv.pinned.length ? "   （反対側は固定表示）" : ""), W / 2, 61);
-        pp.textAlign(pp.LEFT, pp.CENTER);
-      }
-
-      // 中心は経度に依らず固定
-      pp.push();
-      pp.translate(W / 2 + st.view.tx, H / 2 + st.view.ty);
-      pp.scale(k);
-      const cw = S.NODE_W + 30, ch = NH + 12;
-      pp.noFill(); pp.stroke(c.centerRing); pp.strokeWeight(1.6 / k);
-      pp.circle(0, 0, S.GEO.r0 * 0.62);
-      pp.fill(c.center); pp.stroke(c.center); pp.strokeWeight(1 / k);
-      pp.rect(-cw / 2, -ch / 2, cw, ch, 11);
-      pp.noStroke(); pp.fill(c.centerTx); pp.textSize(14.5);
-      pp.textAlign(pp.CENTER, pp.CENTER);
-      pp.text(fit(pp, (dv.labels && dv.labels[cen]) || cen, cw - 18), 0, 0.5);
-      pp.pop();
-      hitBoxes.push({ kind: "node", name: cen, screen: true,
-        x: W / 2 + st.view.tx - (cw * k) / 2, y: H / 2 + st.view.ty - (ch * k) / 2,
-        w: cw * k, h: ch * k });
-      pp.textAlign(pp.LEFT, pp.CENTER);
-    }
-
-    /* 地球儀。区画の配置と大きさ、いまどこを向いているかを一目で示す。
-       内側の環が上錐（依存）、外側が下錐（参照）。掴んで回すと正面が変わる。 */
-    function drawGlobe(pp, c, dv, st, W, H) {
-      if (!dv.sectors || !dv.sectors.length) return;
-      const R = 58, cx = W - R - 22, cy = R + 22;
-      const phi = phiAnim;
-      globeRect = { x: cx - R - 6, y: cy - R - 6, w: (R + 6) * 2, h: (R + 6) * 2, cx, cy, R };
-
-      pp.noStroke(); pp.fill(c.panel);
-      pp.circle(cx, cy, (R + 8) * 2);
-      pp.noFill(); pp.stroke(c.panelBd); pp.strokeWeight(1);
-      pp.circle(cx, cy, (R + 8) * 2);
-
-      // 球の子午線。奥行きの手掛かり
-      pp.stroke(c.ring); pp.strokeWeight(1);
-      for (let i = 0; i < 6; i++) {
-        const t = (i / 6) * Math.PI - phi;
-        pp.noFill(); pp.ellipse(cx, cy, Math.abs(Math.cos(t)) * R * 2, R * 2);
-      }
-      pp.stroke(c.ring); pp.line(cx - R, cy, cx + R, cy);
-
-      /* 経度は等分なので、区画はどれも同じ角度幅の帯になる。
-         部分グラフの大きさは帯の**太さ**で示す。角度で示すと回す量が
-         均等でなくなり、狙った区画に止められない。 */
-      let frontKey = null, best = Infinity;
-      for (const s of dv.sectors) {
-        const a = Math.abs(wrapPi(s.lon - phi));
-        if (a < best) { best = a; frontKey = s.id; }
-      }
-      const maxW = dv.sectors.reduce((a, s) => Math.max(a, s.weight), 1);
-      const band = (s, rr, weight, alpha) => {
-        const steps = Math.max(4, Math.round(s.span * 14));
-        pp.noFill();
-        pp.strokeWeight(weight);
-        pp.drawingContext.globalAlpha = alpha;
-        pp.beginShape();
-        for (let i = 0; i <= steps; i++) {
-          const lam = s.lon - s.span / 2 + (s.span * i) / steps - phi;
-          pp.vertex(cx + Math.sin(lam) * rr, cy - Math.cos(lam) * rr * 0.30);
-        }
-        pp.endShape();
-        pp.drawingContext.globalAlpha = 1;
-      };
-      for (const s of dv.sectors) {
-        const hue = hueOf(s.key);
-        const d0 = sectorDepth(s, phi);
-        const isFront = s.id === frontKey;
-        const a = d0 > 0 ? 0.3 + 0.7 * d0 : 0.12;
-        const thick = 1.6 + 5.4 * (s.weight / maxW);     // 太さ＝部分グラフの大きさ
-        pp.stroke(`hsl(${hue},62%,${isDark() ? 62 : 45}%)`);
-        band(s, R * 0.8, isFront ? thick + 2 : thick, a);
-        // 区画の切れ目。等分なので、止まる位置が目盛りとして読める
-        const edge = s.lon - s.span / 2 - phi;
-        pp.stroke(c.ring); pp.strokeWeight(1);
-        pp.drawingContext.globalAlpha = 0.5;
-        pp.line(cx + Math.sin(edge) * R * 0.62, cy - Math.cos(edge) * R * 0.62 * 0.30,
-                cx + Math.sin(edge) * R * 0.98, cy - Math.cos(edge) * R * 0.98 * 0.30);
-        pp.drawingContext.globalAlpha = 1;
-      }
-      // 固定表示している側があることを示す環
-      if (dv.pinned && dv.pinned.length) {
-        for (const part of dv.pinned) {
-          pp.noFill(); pp.stroke(CONE[part.coneId].wash); pp.strokeWeight(2);
-          pp.drawingContext.globalAlpha = 0.75;
-          pp.ellipse(cx, cy, R * 0.42 * 2, R * 0.42 * 2 * 0.30);
-          pp.drawingContext.globalAlpha = 1;
-        }
-      }
-
-      // 正面の印
-      pp.stroke(c.center); pp.strokeWeight(1.5);
-      pp.line(cx, cy - R - 4, cx, cy + R + 4);
-      pp.noStroke(); pp.fill(c.muted); pp.textSize(9.5);
-      pp.textAlign(pp.CENTER, pp.TOP);
-      pp.text("掴んで回す / 押して正面へ", cx, cy + R + 10);
-      pp.textAlign(pp.LEFT, pp.CENTER);
-    }
-
     /* 画面固定の凡例。四種類の辺を実物と同じ描き方で並べる。
        別の場所に文字だけで書いても、線を見比べられないと区別に使えない。 */
-    function drawLegend(pp, c, dv, W, H) {
+    function drawLegend(pp, c, dv, st, W, H) {
       const rows = [];
-      // 球面モードでは辺は区画の内側に持っているので、そちらから拾う
-      const src = (dv.sectors && dv.sectors.length)
-        ? dv.sectors.flatMap((s) => s.parts.flatMap((pt) => pt.edges)) : dv.edges;
-      const has = new Set(src.map((e) => e.cone + "|" + e.kind));
+      const has = new Set(dv.edges.map((e) => e.cone + "|" + e.kind));
       for (const key of ["dep|type", "dep|value", "ref|type", "ref|value"]) {
         rows.push({ key, st: EDGE[key], on: has.has(key) });
       }
+      /* 描かれている節点のパッケージ（対象のパッケージ以外）。縁の色の凡例。 */
+      const pkgs = new Map();
+      if (LDR.pkg) {
+        for (const n of Object.keys(dv.posAll || {})) {
+          const nd = st.nodes[n];
+          const col = pkgColorOf(n, nd, st);
+          if (!col) continue;
+          const p = LDR.pkg.packageOf(st.granularity === "module" ? n : nd.module);
+          pkgs.set(p, (pkgs.get(p) || 0) + 1);
+        }
+      }
 
-      /* 幅が足りないところに 268 px の凡例を置くと、地球儀と食い合って
-         グラフに残る面積が無くなる。狭いときは線見本だけの一列に畳む。 */
+      /* 幅が足りないところに 268 px の凡例を置くと、グラフに残る面積が無くなる。
+         狭いときは線見本だけの一列に畳む。 */
       if (W < 760) {
         const y0 = 14, x0 = 12;
         pp.noStroke(); pp.fill(c.panel);
@@ -788,7 +574,8 @@
       }
 
       const padX = 11, padY = 9, lh = 19, sample = 34, boxW = 268;
-      const boxH = padY * 2 + lh * rows.length + 20;
+      const pkgRows = [...pkgs.entries()].sort((a, b) => b[1] - a[1]);
+      const boxH = padY * 2 + lh * rows.length + 20 + (pkgRows.length ? 16 + 17 * Math.ceil(pkgRows.length / 2) : 0);
       const x = 12, y = 12;
 
       pp.noStroke(); pp.fill(c.panel);
@@ -824,9 +611,23 @@
         pp.drawingContext.globalAlpha = 1;
       });
 
-      /* 錐の見出しは上下の端に置く。どちら側が何なのかを常に示す。
-         球面モードでは右上を地球儀が占めているので置かない。重ねると両方読めない。 */
-      if (dv.sectors && dv.sectors.length) { pp.textAlign(pp.LEFT, pp.CENTER); return; }
+      /* 縁の色 = パッケージ（対象の外から来た宣言）。二列に並べる。 */
+      if (pkgRows.length) {
+        const y0 = y + padY + 20 + rows.length * lh + 4;
+        pp.noStroke(); pp.fill(c.muted); pp.textSize(10.5);
+        pp.textAlign(pp.LEFT, pp.CENTER);
+        pp.text("縁の色 = パッケージ（対象の外）", x + padX, y0 + 6);
+        pkgRows.forEach(([p, n], i) => {
+          const col = i % 2, row = Math.floor(i / 2);
+          const xx = x + padX + col * 124, yy = y0 + 22 + row * 17;
+          pp.noFill(); pp.stroke(LDR.pkg.colorOf(p)); pp.strokeWeight(1.8);
+          pp.rect(xx, yy - 5, 14, 10, 3);
+          pp.noStroke(); pp.fill(c.faint); pp.textSize(11);
+          pp.text(`${LDR.pkg.labelOf(p)} ${n}`, xx + 20, yy);
+        });
+      }
+
+      /* 錐の見出しは上下の端に置く。どちら側が何なのかを常に示す。 */
       pp.textSize(12);
       for (const cone of dv.cones) {
         if (!cone.rings.length) continue;
@@ -845,10 +646,9 @@
       pp.loop();          // 眠っていたら起こす(ホバーカードの追従にも必要)
       const st = S.state;
       const w = worldOf(pp.mouseX, pp.mouseY, st, pp.width, pp.height);
-      const h = pick(w.x, w.y, pp.mouseX, pp.mouseY);
+      const h = pick(w.x, w.y);
       S.actions.hover(h && h.kind === "node" ? h.name : null);
-      host.style.cursor = inGlobe(pp.mouseX, pp.mouseY) ? "ew-resize"
-        : h ? "pointer" : (drag ? "grabbing" : "grab");
+      host.style.cursor = h ? "pointer" : (drag ? "grabbing" : "grab");
     };
 
     pp.mousePressed = function () {
@@ -861,22 +661,11 @@
       const isLeft = (mb !== null && typeof mb === "object") ? !!mb.left : mb === pp.LEFT;
       if (!isLeft) return;
       if (pp.mouseX < 0 || pp.mouseY < 0 || pp.mouseX > pp.width || pp.mouseY > pp.height) return;
-      if (S.state.view3d && inGlobe(pp.mouseX, pp.mouseY)) {
-        globeDrag = { x: pp.mouseX, phi: S.state.phi, moved: false };
-        return;
-      }
       drag = { x: pp.mouseX, y: pp.mouseY, tx: S.state.view.tx, ty: S.state.view.ty, moved: false };
     };
 
     pp.mouseDragged = function () {
       pp.loop();
-      if (globeDrag) {
-        const dx = pp.mouseX - globeDrag.x;
-        if (Math.abs(dx) > 2) globeDrag.moved = true;
-        S.actions.setPhi(globeDrag.phi + dx * 0.014);
-        clearTimeout(snapTimer);          // 掴んでいる間は寄せない
-        return;
-      }
       if (!drag) return;
       const dx = pp.mouseX - drag.x, dy = pp.mouseY - drag.y;
       if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
@@ -885,25 +674,20 @@
 
     pp.mouseReleased = function () {
       pp.loop();
-      if (globeDrag) {
-        const moved = globeDrag.moved; globeDrag = null;
-        if (!moved && globeRect) {
-          // 押した位置の経度へ最短回りで正面を移し、そこから最寄りの区画へ落ち着かせる
-          const t = Math.max(-1, Math.min(1, (pp.mouseX - globeRect.cx) / globeRect.R));
-          S.actions.spinTo(S.state.phi + Math.asin(t));
-        }
-        snapToNearest();
-        return;
-      }
       if (!drag) return;
       const moved = drag.moved; drag = null;
       if (moved) return;
       if (pp.mouseX < 0 || pp.mouseY < 0 || pp.mouseX > pp.width || pp.mouseY > pp.height) return;
       const st = S.state;
       const w = worldOf(pp.mouseX, pp.mouseY, st, pp.width, pp.height);
-      const h = pick(w.x, w.y, pp.mouseX, pp.mouseY);
+      const h = pick(w.x, w.y);
       if (!h) return;
       if (h.kind === "expand") { S.actions.toggleExpand(h.name); return; }
+      if (h.kind === "cluster") {
+        const r = S.actions.toggleCluster(h.name);
+        if (r && !r.ok && r.msg && LDR.toast) LDR.toast(r.msg);   // 固定で開いている由来を押したとき
+        return;
+      }
       const now = Date.now();
       if (lastClickName === h.name && now - lastClick < 380) {
         S.actions.navigate(h.name);          // ダブルクリック = 中心移動（連鎖的に降りる／登る）
@@ -918,15 +702,6 @@
       pp.loop();
       if (pp.mouseX < 0 || pp.mouseY < 0 || pp.mouseX > pp.width || pp.mouseY > pp.height) return;
       const st = S.state;
-      /* 球面モードでは Shift かホイール上での横方向を回転に割り当てる。
-         回している間は自由に動かし、手が止まったら最寄りの区画へ寄せて止める。
-         途中の角度で置き去りにすると、どの区画も半端に傾いたまま読めない。 */
-      if (st.view3d && (e.shiftKey || inGlobe(pp.mouseX, pp.mouseY))) {
-        S.actions.setPhi(st.phi + (e.deltaY > 0 ? 0.1 : -0.1));
-        scheduleSnap(220);
-        if (e.preventDefault) e.preventDefault();   // p5 2.x では return false だけに頼らない
-        return false;
-      }
       const k0 = st.view.k == null ? fitK : st.view.k;
       const f = e.deltaY > 0 ? 0.92 : 1.08;
       const k1 = Math.min(3, Math.max(0.1, k0 * f));
@@ -941,18 +716,24 @@
     };
   }
 
-  /** 当たり判定。球面モードの箱は画面座標、平面モードの箱は world 座標で持つ。 */
-  function pick(wx, wy, sx, sy) {
+  /** 対象のパッケージ（レポートの対象モジュールの先頭成分）。読み込んだデータごとに一度だけ決める。 */
+  let tpCache = { nodes: null, pkg: "" };
+  function targetPackage(st) {
+    if (tpCache.nodes !== st.nodes) {
+      const first = st.order[0];
+      tpCache = { nodes: st.nodes, pkg: first && st.nodes[first] && LDR.pkg ? LDR.pkg.packageOf(st.nodes[first].module) : "" };
+    }
+    return tpCache.pkg;
+  }
+
+  /** 当たり判定。箱は world 座標で持つ。後から積んだもの（手前）を優先する。 */
+  function pick(wx, wy) {
     for (let i = hitBoxes.length - 1; i >= 0; i--) {
       const b = hitBoxes[i];
-      const x = b.screen ? sx : wx, y = b.screen ? sy : wy;
-      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b;
+      if (wx >= b.x && wx <= b.x + b.w && wy >= b.y && wy <= b.y + b.h) return b;
     }
     return null;
   }
-
-  const inGlobe = (x, y) => globeRect && x >= globeRect.x && x <= globeRect.x + globeRect.w
-    && y >= globeRect.y && y <= globeRect.y + globeRect.h;
 
   function fit(pp, s, maxW) {
     if (maxW <= 8) return "";
@@ -973,6 +754,9 @@
 
   LDR.canvas = {
     mount, EDGE, CONE,
+    hueOf,                                   // 左の一覧の名前空間の色も同じ関数で決める
+    targetPackage,                           // 右パネルのパッケージ表示も同じ判定を使う
+
     zoomIn: () => S.actions.zoomBy(1.18, fitK),
     zoomOut: () => S.actions.zoomBy(1 / 1.18, fitK),
     reset: () => S.actions.resetView(),

@@ -66,11 +66,6 @@
     density: 36,            // 1 層に描く上限。溢れは環のラベルに件数で出る
     hideFrame: true,        // 論理の骨組みを潰して補題を前面に出す
 
-    /* 球面モード。部分グラフごとに扇をまるごと与え、経度で切り替える。
-       一つの扇を全ての部分グラフで共有すると、どれも狭くなって重なる。
-       前に来た区画だけを読める大きさで描き、他は奥へ退かせる。 */
-    view3d: false,
-    phi: 0,                 // いま正面に向いている経度
     pathFrom: null,         // ここから中心までの経路を強調する
     derivOpen: new Set(),   // 導出図で開いている前提
 
@@ -82,12 +77,19 @@
     hovered: null,
 
     query: "",
-    listMode: "impl",       // "impl" | "deps" | "ns" | "tree"
-    sortMetric: "closure",  // listMode="deps" のときの尺度
+    listMode: "tree",       // "tree" | "ns"
     groupBy: "subject",     // 部分グラフの束ね方: "subject" | "module" | "kind" | "none"
-    treeClosed: new Set(),  // ツリー表示で閉じているモジュール接頭辞
+    treeClosed: new Set(),  // 一覧で畳んでいる枝の鍵（"md:…" はモジュール、"ns:…" は名前空間）
     kindFilter: new Set(),
     onlySorry: false,
+    /* 派生（由来から導かれる宣言: casesOn / mk.inj / sizeOf_spec …）の開閉。
+       閉じた由来の派生は、グラフでは由来の節点に畳まれ（辺に経由の札）、一覧では
+       由来の行の下の小枝に畳まれる。開閉は一覧とグラフで共有する。
+       状態はこの集合ただ一つ（既定は空＝全て畳む）。「全て開く」は集合を全入れにする
+       操作であって、別の旗ではない（旗と集合の二重状態は、押しても効かない／勝手に
+       開いているという見え方を生んだ。実測）。これとは別に、中心が派生ならその由来、
+       経路表示の区間に派生が含まれればその由来を **強制的に** 開く（forcedOpen）。 */
+    openClusters: new Set(),
 
     /* 右パネルのプレビュー。中心に固定するか、選んだものを追うかを切り替える。
        比較しながら読むときは追従、腰を据えて読むときは固定が要る。 */
@@ -108,42 +110,124 @@
   /* ---------- 索引のキャッシュ ----------
      索引と既定中心は「読み込んだデータ」だけで決まる。展開やズームのたびに
      組み直すと、宣言数に比例した仕事が操作のたびに走る。 */
-  let cache = { nodesRef: null, decl: {}, mod: {}, defaultCenter: {}, metrics: {} };
+  let cache = { nodesRef: null, decl: {}, mod: {}, defaultCenter: {}, metrics: {}, view: {}, contracted: {}, trace: {}, facetOrigins: null };
 
-  function indices() {
+  /* ---------- 元の索引 ----------
+     宣言の事実（直接依存・尺度・極小元・順序区間）は常にここで測る。 */
+  function baseIndices() {
     if (cache.nodesRef !== state.nodes) {
-      cache = { nodesRef: state.nodes, decl: {}, mod: {}, defaultCenter: {}, metrics: {}, laws: null };
+      cache = { nodesRef: state.nodes, decl: {}, mod: {}, defaultCenter: {}, metrics: {}, laws: null,
+                view: {}, contracted: {}, trace: {}, facetOrigins: null };
     }
     const em = state.edgeMode;
     if (!cache.decl[em]) cache.decl[em] = G.buildIndices(state.nodes, em);
     if (!cache.mod[em]) cache.mod[em] = G.buildModuleIndices(state.nodes, em);
-    if (!cache.defaultCenter[em]) cache.defaultCenter[em] = G.pickDefaultCenter(state.nodes, cache.decl[em]);
-    return { decl: cache.decl[em], mod: cache.mod[em], defaultCenter: cache.defaultCenter[em] };
+    if (!cache.defaultCenter[em]) {
+      // 既定中心は手書きの宣言から選ぶ。骨組み・派生・断片は候補にしない
+      const skip = LDR.roles ? (n) => {
+        const nd = state.nodes[n];
+        return LDR.roles.roleOf(n, nd) === "frame" || (!!nd.originRel && nd.originRel !== "member");
+      } : null;
+      cache.defaultCenter[em] = G.pickDefaultCenter(state.nodes, cache.decl[em], skip);
+    }
+    if (!cache.facetOrigins) {
+      // 派生を持つ由来の集合。「全て開く」はこれを openClusters に入れる操作
+      const s = new Set();
+      for (const nd of Object.values(state.nodes)) {
+        if (nd.originRel === "facet" && nd.origin && state.nodes[nd.origin]) s.add(nd.origin);
+      }
+      cache.facetOrigins = s;
+    }
+    return { decl: cache.decl[em], mod: cache.mod[em], defaultCenter: cache.defaultCenter[em], facetOrigins: cache.facetOrigins };
+  }
+
+  /* ---------- 順序区間 [t, c] = ↑t ∩ ↓c ----------
+     経路表示の区間は **元のグラフ** で取る。表示用の商（派生を畳んだグラフ）で取ると、
+     閉じた派生の中身だけを通る経路（`pair_inj` → `mk.inj` → `id`）や、極小元そのものが
+     閉じた派生（`Exists.rec`）のとき区間が空になり、極小元を押しても何も起きない
+     （実測。極小元 min(↓c) は元のグラフで取っているので、両者が食い違っていた）。
+     区間は中心・対象・辺の種類だけで決まるので記憶化する。 */
+  function traceInterval() {
+    const t = state.traceTarget;
+    if (!t) return null;
+    const b = baseIndices();
+    const c = effCenter();
+    if (!c) return null;
+    const k = state.granularity + "|" + state.edgeMode + "|" + c + "|" + t;
+    if (!(k in cache.trace)) {
+      if (Object.keys(cache.trace).length > 32) cache.trace = {};
+      const idx = state.granularity === "module" ? b.mod : b.decl;
+      cache.trace[k] = G.orderInterval(c, t, idx.dep, idx.ref, 64);
+    }
+    return cache.trace[k];
+  }
+
+  /* ---------- 由来の強制開放 ----------
+     商を取る側（表示）が、元のグラフで決めた事実（中心・区間）を必ず含むように、
+     開閉集合を最小限だけ広げる。
+       ・中心が派生なら、その由来（中心は必ず可視）
+       ・経路表示の区間に派生 g が含まれれば、その由来 π(g)（区間の像が節点として現れる）
+     利用者の開閉（openClusters）とは独立で、押しても閉じない（理由は toggleCluster が返す）。 */
+  function forcedOpen() {
+    const set = new Set();
+    if (state.granularity !== "decl") return set;
+    const nodes = state.nodes;
+    const own = (n) => {
+      const nd = nodes[n];
+      if (nd && nd.originRel === "facet" && nd.origin && nodes[nd.origin]) set.add(nd.origin);
+    };
+    own(centerName());
+    const iv = traceInterval();
+    if (iv) for (const n of iv) own(n);
+    return set;
+  }
+  function clusterOpen(o, forced) {
+    return state.openClusters.has(o) || forced.has(o);
+  }
+  function openSignature(forced) {
+    const f = forced || forcedOpen();
+    return [...state.openClusters].sort().join(",") + "|" + [...f].sort().join(",");
+  }
+
+  function indices() {
+    const b = baseIndices();
+    const em = state.edgeMode;
+    /* 表示用の有効グラフ（断片の埋め戻し・派生の畳み込み。graph.effectiveNodes）。
+       開閉状態（利用者の集合＋強制開放）ごとに作り直す。 */
+    const forced = forcedOpen();
+    const vk = em + "|" + openSignature(forced);
+    if (!cache.view[vk]) {
+      if (Object.keys(cache.view).length > 8) { cache.view = {}; cache.contracted = {}; }
+      const eff = G.effectiveNodes(state.nodes, (o) => clusterOpen(o, forced));
+      cache.view[vk] = {
+        key: vk, nodes: eff.nodes, idx: G.buildIndices(eff.nodes, em),
+        via: eff.via, facetCount: eff.facetCount, partCount: eff.partCount,
+      };
+    }
+    return Object.assign({}, b, { view: cache.view[vk], forced });
   }
 
   /* ---------- 依存の尺度 ----------
 
-     直接依存の本数だけでは「依存の少ない順」にならない。c が d の依存先でも
+     直接依存の本数は「依存の少ない順」にならない。c が d の依存先でも
      deg(c) > deg(d) が起こり得るので、その並びは依存順序と両立しない。
-     順序と両立する量（c ≺ d ⇒ m(c) < m(d)）を揃えて、選べるようにする。
+     ここでは順序と両立する量だけを持つ。
 
-       closure  |↓d|        総仮定量。昇順は必ず線形拡大になる。
-       depth    最長導出鎖   何段の導出を経ているか。これも線形拡大。
-       minimal  |min(↓d)|   必要な原始要素の数。
-       direct   直接依存数   従来の量。比較のために残す（線形拡大ではない）。
-       refs     |↑d| の一段  どれだけ使われているか。影響範囲。
-       size     証明項の節点数。証明の重さ。 */
+       closure  |↓d|        総仮定量。c ≺ d ⇒ m(c) < m(d) なので昇順は線形拡大になる。
+       depth    最長導出鎖   何段の導出を経ているか。これも狭義に単調。
+       minimal  |min(↓d)|   必要な原始要素の数。c ≺ d ⇒ m(c) ≤ m(d) の広義単調に
+                            留まるので、並べ替えには使わない（--decl の参考値）。
+
+     右パネルの依存一覧は closure の昇順で並べ、ldr_check は mono な尺度について
+     破れ 0 を検査する。 */
   const METRICS = {
     closure: { ja: "総仮定量 |↓d|", mono: true },
     depth:   { ja: "導出鎖の深さ",  mono: true },
     minimal: { ja: "極小仮定の数",  mono: false },
-    direct:  { ja: "直接依存数",    mono: false },
-    refs:    { ja: "被参照数",      mono: false },
-    size:    { ja: "証明項の大きさ", mono: false },
   };
 
   function metrics() {
-    indices();                       // nodes が変われば cache ごと入れ替わる
+    baseIndices();                   // nodes が変われば cache ごと入れ替わる
     const em = state.edgeMode;
     if (!cache.metrics) cache.metrics = {};
     if (!cache.metrics[em]) {
@@ -151,12 +235,6 @@
       const names = Object.keys(state.nodes);
       const cs = G.closureStats(idx.dep, names);
       const depth = G.chainDepths(idx.dep, names);
-      const direct = {}, refs = {}, size = {};
-      for (const n of names) {
-        direct[n] = (idx.dep[n] || []).length;
-        refs[n] = (idx.ref[n] || []).length;
-        size[n] = state.nodes[n].valueSize || 0;
-      }
       /* 「無条件に得られたものだけから、無条件に得られている」か。
          自分に仮定もインスタンス要求も無く、かつ依存先すべてが同じ性質を持つ。
          利用者が語っていた def の使い分けのうち、三番目にあたる区別。 */
@@ -167,8 +245,8 @@
       const hered = G.hereditary(idx.dep, names, uncond);
       cache.metrics[em] = {
         closure: cs ? cs.size : depth,      // 数え上げられない規模なら深さで代用
-        minimal: cs ? cs.minimal : direct,
-        depth, direct, refs, size, hered,
+        minimal: cs ? cs.minimal : null,    // 代用は無い。無ければ未計算として扱う
+        depth, hered,
         uncond: Object.fromEntries(names.map((n) => [n, uncond(n)])),
         exact: !!cs,
       };
@@ -192,7 +270,7 @@
                 "comm", "assoc", "idem", "absorb", "distrib"];
 
   function lawInventory() {
-    indices();
+    baseIndices();
     if (cache.laws) return cache.laws;
     const rows = new Map();          // 関係名 → { law → [宣言名], pairs }
     for (const [n, nd] of Object.entries(state.nodes)) {
@@ -201,12 +279,20 @@
       // 法則は命題である。型クラスのインスタンス(C α α 等)は構文上 refl の形を
       // 持つがデータであって証明ではない(自己解析で MonadLiftT 等の行として実測)。
       if (!nd.isProp) continue;
-      const rel = nd.shapeRel;
-      if (!rows.has(rel)) rows.set(rel, { rel, total: 0, laws: {}, pairs: {} });
-      const row = rows.get(rel);
+      // 在庫は「この対象が証明したもの」。外部（core / Mathlib）と内部補助は数えない。
+      if (nd.external || nd.internal) continue;
+      // 派生・断片（injEq / sizeOf_spec / _proof_<i> …）は Lean が作った定理であって、対象が証明した法則ではない
+      if (nd.originRel === "facet" || nd.originRel === "part") continue;
+      /* 行の鍵は 関係 × 担い手の型。頭部定数だけだと `LE.le` の反射（Nat）と
+         推移（Int）が同じ行に合流し、無い構造を「全順序」と判断してしまう。
+         多相な主張（shapeType が空）は型を持たない行になる。 */
+      const rel = nd.shapeRel, type = nd.shapeType || "";
+      const key = type ? rel + "@" + type : rel;
+      if (!rows.has(key)) rows.set(key, { key, rel, type, total: 0, laws: {}, pairs: {} });
+      const row = rows.get(key);
       (row.laws[nd.shape] || (row.laws[nd.shape] = [])).push(n);
-      // 二演算法則(吸収・分配)は相方 shapeRel2 を対として控える
-      if ((nd.shape === "absorb" || nd.shape === "distrib") && nd.shapeRel2) {
+      // 二演算法則(吸収・分配)は相方、単調はその関係を shapeRel2 に持つ。対として控える
+      if ((nd.shape === "absorb" || nd.shape === "distrib" || nd.shape === "mono") && nd.shapeRel2) {
         (row.pairs[nd.shape] || (row.pairs[nd.shape] = new Set())).add(nd.shapeRel2);
       }
       row.total++;
@@ -227,7 +313,8 @@
          反射+対称+推移          → 同値
          可換+結合+冪等          → 半束
            相方も半束で吸収が双方向 → 束、さらに分配があれば → 分配束 */
-    const byRel = new Map(list.map((r) => [r.rel, r]));
+    const byKey = new Map(list.map((r) => [r.key, r]));
+    const keyOf = (rel, type) => (type ? rel + "@" + type : rel);
     const hasLaw = (row, l) => (row.laws[l] || []).length > 0;
     const isSemi = (row) => hasLaw(row, "comm") && hasLaw(row, "assoc") && hasLaw(row, "idem");
     for (const r of list) {
@@ -241,7 +328,8 @@
       } else if (isSemi(r)) {
         verdict = { t: "半束", h: 271 };
         for (const g of r.pairs.absorb ? [...r.pairs.absorb] : []) {
-          const rg = byRel.get(g);
+          const rg = byKey.get(keyOf(g, r.type));   // 相方は同じ担い手の型の行
+
           if (rg && isSemi(rg) && rg.pairs.absorb && rg.pairs.absorb.has(r.rel)) {
             const dist = (r.pairs.distrib && r.pairs.distrib.has(g))
                       || (rg.pairs.distrib && rg.pairs.distrib.has(r.rel));
@@ -256,7 +344,8 @@
     return cache.laws;
   }
 
-  /** 部分グラフを束ねる鍵。主題は「何についての宣言か」を Lean 側が出したもの。 */
+  /** 部分グラフを束ねる鍵。主題は「何についての宣言か」を Lean 側が出したもの。
+      パッケージはモジュール名の先頭成分（pkg.packageOf。core は一つに束ねる）。 */
   function groupKeyOf(name) {
     const nd = state.nodes[name];
     if (!nd) return "";
@@ -264,6 +353,7 @@
       case "module":  return nd.module || "";
       case "kind":    return nd.kind || "";
       case "subject": return nd.subject || nd.head || "";
+      case "package": return LDR.pkg ? LDR.pkg.packageOf(nd.module) : "";
       default:        return "";
     }
   }
@@ -341,40 +431,74 @@
   /* ---------- 派生 ---------- */
   function recompute() {
     const nodes = state.nodes;
+    /* 既定中心は元の索引だけで決まる。中心（centerName）が強制開放の計算に要るので、
+       表示用の商（indices）を作る前に確定させる。 */
+    const b = baseIndices();
+    derived.defaultCenter = b.defaultCenter;
     const ix = indices();
-    const idx = state.granularity === "module" ? ix.mod : ix.decl;
-    derived.declIdx = ix.decl; derived.modIdx = ix.mod; derived.idx = idx;
-    derived.defaultCenter = ix.defaultCenter;
+    /* 錐は表示用の有効グラフ（view）で組む。宣言の事実（直接依存・尺度・極小元・区間）は
+       元の索引 decl で測る。モジュール粒度は元の節点から。 */
+    const view = ix.view;
+    const idx = state.granularity === "module" ? ix.mod : view.idx;
+    derived.declIdx = ix.decl; derived.modIdx = ix.mod; derived.idx = idx; derived.viewIdx = view.idx;
+    derived.via = view.via; derived.facetCount = view.facetCount; derived.partCount = view.partCount;
+    derived.forcedOpen = ix.forced;
 
     const c = effCenter();
     derived.center = c;
     derived.cones = [];
-    derived.sectors = [];
-    derived.pinned = [];
-    derived.rotatingCone = null;
     derived.posAll = {};
     derived.edges = [];
     derived.labels = {};
     derived.more = {};
     derived.bbox = { x0: -200, x1: 200, y0: -120, y1: 120 };
+    // 早期 return でも前のデータの値を残さない
+    derived.trueMinimal = []; derived.minimalSet = new Set(); derived.frontier = [];
+    derived.fullDownSize = 0; derived.highlight = null; derived.traceUnreachable = null;
+    derived.pathSet = null; derived.edgeKindOverlay = null; derived.facetReach = {};
     if (!c || !idx.dep) return;
 
     /* min(↓d) は宣言 d の性質であって、いま何を展開しているかとは無関係。
-       可視集合から計算すると初期表示で空になり、意味も違ってしまう。 */
-    const fullDep = G.reachable(c, idx.dep, 64);
-    const mf = G.minimalAndFrontier(Object.keys(fullDep), idx.dep);
+       可視集合から計算すると初期表示で空になり、意味も違ってしまう。
+       元のグラフで測る（断片・派生の畳み込みの影響を受けない）。 */
+    const rawDep = state.granularity === "module" ? idx.dep : ix.decl.dep;
+    const fullDep = G.reachable(c, rawDep, 64);
+    const mf = G.minimalAndFrontier(Object.keys(fullDep), rawDep);
     derived.trueMinimal = mf.trueMinimal;
     derived.minimalSet = new Set(mf.trueMinimal);   // 描画は毎フレーム引くので集合で持つ
     derived.frontier = mf.frontier;
     derived.fullDownSize = Object.keys(fullDep).length;
 
-    /* 経路表示中はその区間を強制的に開く。公理を押したのに畳まれたままでは意味がない。 */
-    let openSet = state.expanded, interval = null;
-    if (state.traceTarget) {
-      interval = G.orderInterval(c, state.traceTarget, idx.dep, idx.ref, 64);
-      openSet = new Set([...state.expanded, ...interval]);
+    /* 由来ごとに「この中心から見える派生の数」。派生 g は中心の依存閉包 ↓c か参照閉包 ↑c に
+       入っているときだけ、由来を開けば節点として現れ得る。グラフの札 `+k` はこの k を出す
+       （総数 n を出すと「開けば n 件現れる」という嘘になる。`Params +8` を開いても描画が
+       増えなかった実測）。一覧は由来の下に全ての派生を出すので総数 facetCount を使う。 */
+    if (state.granularity === "decl") {
+      const fullRef = G.reachable(c, ix.decl.refAll, 64);
+      const reach = {};
+      for (const [n, nd] of Object.entries(nodes)) {
+        if (nd.originRel !== "facet" || !nd.origin || !nodes[nd.origin]) continue;
+        if (n in fullDep || n in fullRef) reach[nd.origin] = (reach[nd.origin] || 0) + 1;
+      }
+      derived.facetReach = reach;
     }
-    derived.highlight = interval;
+
+    /* 経路表示中はその区間（元のグラフで取った [t, c]。traceInterval）を強制的に開く。
+       区間に派生が含まれれば forcedOpen がその由来を開いているので、区間の各節点は
+       商の中に像を持つ（断片は由来に埋め戻されているので、両端が区間に入る辺として現れる）。
+       区間が空（= 読み込んだ範囲に経路が無い）なら強調は掛けない。空の集合をそのまま
+       渡すと「区間外を暗くする」規則で全てが暗くなり、何も伝わらない（自己解析で
+       `double_eq` の `propext` に実測）。空だった事実は traceUnreachable で表に出す。 */
+    let openSet = state.expanded;
+    if (state.traceTarget) {
+      const interval = traceInterval();
+      if (interval && interval.size) {
+        derived.highlight = interval;
+        openSet = new Set([...state.expanded, ...interval]);
+      } else {
+        derived.traceUnreachable = state.traceTarget;
+      }
+    }
 
     /* 選んだノードから中心までの経路。上錐なら中心から下りる向き、
        下錐なら中心へ上がる向きなので、順序区間の取り方が逆になる。
@@ -400,29 +524,40 @@
     if (state.hideFrame && state.granularity === "decl" && LDR.roles) {
       const names = Object.keys(nodes);
       const hidden = (n) => LDR.roles.roleOf(n, nodes[n]) === "frame";
+      const kindDep = (u, v) => idx.edgeKind[u + " " + v] || "type";
+      const kindRef = (u, v) => (idx.refKind && idx.refKind[u + " " + v]) || "type";
+      const refAdj0 = refAdj || {};
       if (!cache.contracted) cache.contracted = {};
-      const ck = state.edgeMode + "|" + state.refFilter;
+      // 縮約は有効グラフの上で行うので、開閉状態（view.key）も鍵に入れる
+      const ck = state.edgeMode + "|" + state.refFilter + "|" + view.key;
       if (!cache.contracted[ck]) {
-        const kindDep = (u, v) => idx.edgeKind[u + " " + v] || "type";
-        const kindRef = (u, v) => (idx.refKind && idx.refKind[u + " " + v]) || "type";
         cache.contracted[ck] = {
           dep: G.contractThrough(idx.dep, hidden, names, kindDep),
-          ref: G.contractThrough(refAdj || {}, hidden, names, kindRef),
+          ref: G.contractThrough(refAdj0, hidden, names, kindRef),
         };
       }
-      depAdj = cache.contracted[ck].dep.adj;
-      refAdj = cache.contracted[ck].ref.adj;
-      derived.edgeKindOverlay = {
-        dep: cache.contracted[ck].dep.kind,
-        ref: cache.contracted[ck].ref.kind,
-      };
+      const ct = cache.contracted[ck];
+      depAdj = ct.dep.adj; refAdj = ct.ref.adj;
+      let depKind = ct.dep.kind, refKind = ct.ref.kind;
+      /* 中心そのものが骨組みの名前（`.injEq` / `.rec` / `match_*` 等）のとき、縮約は
+         中心を「通り抜ける側」に置き、出辺を持たせない（両錐が空になる。フィクスチャの
+         `Pair.mk.injEq` を中心にして実測）。中心は利用者が選んで見ている節点なので
+         必ず可視として扱い、中心の出辺だけをその場で縮約して上書きする。縮約表の
+         キャッシュは中心に依存しないまま保つ。 */
+      if (hidden(c)) {
+        const d = G.contractNode(idx.dep, hidden, c, kindDep);
+        const r = G.contractNode(refAdj0, hidden, c, kindRef);
+        depAdj = Object.assign({}, depAdj, { [c]: d.adj });
+        refAdj = Object.assign({}, refAdj, { [c]: r.adj });
+        depKind = Object.assign({}, depKind, d.kind);
+        refKind = Object.assign({}, refKind, r.kind);
+      }
+      derived.edgeKindOverlay = { dep: depKind, ref: refKind };
     }
     const specs = [
       { id: "dep", adj: depAdj, sector: SECTORS.dep },
       { id: "ref", adj: refAdj || {}, sector: SECTORS.ref },
     ];
-
-    if (state.view3d) { buildSectors(c, specs, idx, passes, openSet); return; }
 
     const claimed = new Set([c]);
     for (const sp of specs) {
@@ -433,6 +568,7 @@
       const cone = G.layoutCone({
         layers, adj: sp.adj, th0: sp.sector.th0, th1: sp.sector.th1,
         groupOf: state.groupBy === "none" ? null : groupKeyOf,
+        pin: openSet,   // 経路表示の区間と手動展開は、層上限より優先して描く
         r0: GEO.r0, dr: GEO.dr, slotMax: GEO.slotMax, slotMin: GEO.slotMin,
         slotPref: GEO.slotPref, rSoft: GEO.rSoft, maxPerLayer: state.density,
       });
@@ -461,11 +597,14 @@
           if (seen.has(kk)) continue;
           seen.add(kk);
           const ov = derived.edgeKindOverlay;
+          // 経由: 畳まれた派生・断片を通って来た辺（依存の向きは「依存する側 → 依存先」）
+          const viaKey = cone.id === "dep" ? kk : v + " " + u;
           derived.edges.push({
             u, v, cone: cone.id,
             kind: cone.id === "dep"
               ? ((ov && ov.dep[kk]) || idx.edgeKind[kk] || "type")
               : ((ov && ov.ref[kk]) || (idx.refKind && idx.refKind[kk]) || "type"),
+            via: (derived.via && derived.via[viaKey]) || null,
           });
         }
       }
@@ -487,153 +626,14 @@
     }
   }
 
-  /* ---------- 球面モードの配置 ----------
-
-     区画 = 部分グラフ。一つの部分グラフは上錐にも下錐にも顔を出すので、
-     **一つの経度に上下両方を載せる**。上と下で別々に経度を割り当てると、
-     回したときに正面へ来る区画が上下で食い違い、意味を成さない。
-
-     経度の幅は部分グラフの重さ（上下あわせた可視ノード数）に比例する。
-     ただし 1〜2 個しかない部分グラフに独立した区画を与えると、回しても
-     当たらない針のような区間が並ぶだけなので、小さいものは「その他」に束ねる。
-
-     層の番号は全体の錐で決めたものをそのまま使う。部分グラフごとに数え直すと、
-     同じ ℓ が違う深さを意味してしまう。 */
-  const SECTOR_MAX = 10;      // 独立した区画として立てる上限
-  const SECTOR_MIN_W = 3;     // これ未満の部分グラフは「その他」へ
-  const PIN_MAX = 24;         // これ以下の錐は分割せず、回さず、常に出す
-
-  function buildSectors(c, specs, idx, passes, openSet) {
-    derived.sectors = [];
-    derived.pinned = [];
-    const center = { x: 0, y: 0, r: 0, th: 0, level: 0, w: NODE_W, cone: "center" };
-    derived.posAll[c] = center;
-
-    /* 各錐の層を先に集める。ここではまだ分割しない。 */
-    const cones = [];
-    for (const sp of specs) {
-      const vis = G.visibleClosure(c, sp.adj, state.baseDepth, openSet);
-      Object.assign(derived.more, vis.closedFrontier);   // 区画の中でも個別に開ける
-      const lv = G.longestPathLevels(c, sp.adj, vis.hop);
-      const layers = lv.layers.map((L, l) =>
-        l === 0 ? [c] : L.filter((n) => n !== c && passes(n)));
-      const count = layers.reduce((a, L, l) => a + (l ? L.length : 0), 0);
-      cones.push({ sp, layers, count });
-      derived.cones.push({ id: sp.id, rings: [], overflow: {}, rMax: 0,
-        th0: sp.sector.th0, th1: sp.sector.th1, adj: sp.adj });
-    }
-
-    /** 一組の層から扇を一つ作る。区画にも固定側にも同じものを使う。 */
-    const makePart = (sp, layers, sectorId) => {
-      const cone = G.layoutCone({
-        layers, adj: sp.adj, th0: sp.sector.th0, th1: sp.sector.th1, groupOf: null,
-        r0: GEO.r0, dr: GEO.dr, slotMax: GEO.slotMax, slotMin: GEO.slotMin,
-        slotPref: GEO.slotPref, rSoft: GEO.rSoft, maxPerLayer: state.density,
-      });
-      const own = new Set(Object.keys(cone.pos));
-      const edges = [];
-      const ov = derived.edgeKindOverlay;
-      for (const u of [c, ...own]) {
-        for (const v of sp.adj[u] || []) {
-          if (!own.has(v)) continue;
-          const kk = u + " " + v;
-          edges.push({ u, v, cone: sp.id,
-            kind: sp.id === "dep"
-              ? ((ov && ov.dep[kk]) || idx.edgeKind[kk] || "type")
-              : ((ov && ov.ref[kk]) || (idx.refKind && idx.refKind[kk]) || "type") });
-        }
-      }
-      for (const [n, p] of Object.entries(cone.pos)) {
-        if (!derived.posAll[n]) derived.posAll[n] = Object.assign({ cone: sp.id, sector: sectorId }, p);
-      }
-      return { coneId: sp.id, pos: cone.pos, rings: cone.rings, overflow: cone.overflow,
-        rMax: cone.rMax, th0: cone.th0, th1: cone.th1, edges };
-    };
-
-    /* 薄い錐は分割しない。9 件しかない上錐を部分グラフに割っても、
-       回すたびに片側が空になるだけで読みにくくなる。常に出しておく。
-       厚い錐だけを部分グラフに割って回す。 */
-    const rotating = cones.filter((x) => x.count > PIN_MAX);
-    const pinnedCones = cones.filter((x) => x.count <= PIN_MAX && x.count > 0);
-    for (const x of pinnedCones) derived.pinned.push(makePart(x.sp, x.layers, "pinned"));
-    derived.rotatingCone = rotating.length ? rotating[0].sp.id : null;
-
-    if (!rotating.length) {
-      // どちらも薄い。回す対象が無いので、そのまま両方を出す。
-      finishSectors();
-      return;
-    }
-
-    /* 厚い錐を部分グラフに割る。小さい群は「その他」へ束ね、上限も掛ける。
-       針のような区間が並ぶと、回しても当たらず操作にならない。 */
-    for (const rot of rotating) {
-      const byGroup = new Map();
-      rot.layers.forEach((L, l) => {
-        if (l === 0) return;
-        for (const n of L) {
-          const key = groupKeyOf(n) || "(その他)";
-          if (!byGroup.has(key)) byGroup.set(key, { key, layers: [], weight: 0 });
-          const g = byGroup.get(key);
-          (g.layers[l] || (g.layers[l] = [])).push(n);
-          g.weight++;
-        }
-      });
-      const sorted = [...byGroup.values()].sort((a, b) => (b.weight - a.weight) || (a.key < b.key ? -1 : 1));
-      const keep = [], rest = [];
-      for (const g of sorted) {
-        if (keep.length < SECTOR_MAX && g.weight >= SECTOR_MIN_W) keep.push(g); else rest.push(g);
-      }
-      if (rest.length) {
-        const merged = { key: `その他 (${rest.length} 群)`, layers: [], weight: 0, merged: true };
-        for (const g of rest) {
-          g.layers.forEach((L, l) => {
-            if (!L) return;
-            (merged.layers[l] || (merged.layers[l] = [])).push(...L);
-          });
-          merged.weight += g.weight;
-        }
-        if (merged.weight) keep.push(merged);
-      }
-
-      /* 経度は **等分**。重さに比例させると 37 % の区画と 1 % の区画が混在し、
-         回す角度が全く均等にならず、狙った区画に止められない。
-         重さは地球儀の帯の太さで示す。 */
-      const n = keep.length || 1;
-      const span = (2 * Math.PI) / n;
-      keep.forEach((g, i) => {
-        for (let j = 0; j < g.layers.length; j++) if (!g.layers[j]) g.layers[j] = [];
-        g.layers[0] = [c];
-        const id = "s|" + rot.sp.id + "|" + g.key;
-        const part = makePart(rot.sp, g.layers, id);
-        derived.sectors.push({ id, key: g.key, merged: !!g.merged, coneId: rot.sp.id,
-          weight: g.weight, index: i, of: n, lon: span * (i + 0.5), span,
-          parts: [part], rMax: part.rMax });
-      });
-    }
-    finishSectors();
-
-    function finishSectors() {
-      derived.labels = G.shortestUniqueSuffixes(Object.keys(derived.posAll));
-      let x0 = -NODE_W, x1 = NODE_W, y0 = -NODE_H * 2, y1 = NODE_H * 2;
-      const eat = (part) => {
-        for (const p of Object.values(part.pos)) {
-          x0 = Math.min(x0, p.x - p.w / 2); x1 = Math.max(x1, p.x + p.w / 2);
-          y0 = Math.min(y0, p.y - NODE_H); y1 = Math.max(y1, p.y + NODE_H);
-        }
-      };
-      for (const part of derived.pinned) eat(part);
-      for (const s of derived.sectors) for (const part of s.parts) eat(part);
-      derived.bbox = { x0, x1, y0, y1 };
-    }
-  }
-
   function key() {
     return [
       Object.keys(state.nodes).length, state.edgeMode, state.granularity,
       state.baseDepth, state.refFilter, state.groupBy, state.density, state.hideFrame,
-      state.view3d, state.pathFrom,
+      state.pathFrom,
       [...state.expanded].sort().join(","),
       centerName(), state.traceTarget, [...state.kindFilter].sort().join(","),
+      openSignature(),
     ].join("|");
   }
 
@@ -644,8 +644,13 @@
   }
 
   /* ---------- 閲覧状態のピン留め ---------- */
+  /* 読み込んだデータの同一性。ピンは別のデータでは意味を持たないので、保存時に控えて
+     適用時に照合する。宣言数と先頭の宣言名で、実用上は十分に区別できる。 */
+  function datasetId() { return state.order.length + ":" + (state.order[0] || ""); }
+
   function snapshot() {
     return {
+      dataset: datasetId(),
       center: centerName(),
       expanded: [...state.expanded],
       edgeMode: state.edgeMode,
@@ -653,34 +658,44 @@
       baseDepth: state.baseDepth,
       refFilter: state.refFilter,
       groupBy: state.groupBy,
-      sortMetric: state.sortMetric,
       previewFollow: state.previewFollow,
       previewName: state.previewName,
       traceTarget: state.traceTarget,
       selected: state.selected,
       kindFilter: [...state.kindFilter],
+      openClusters: [...state.openClusters],
       view: { ...state.view },
     };
   }
 
+  /* 復元の結果を {ok, msg} で返す。別のデータのピン、無くなった中心は黙って
+     見かけだけ戻すのではなく、何が戻せなかったかを呼び出し元（toast）に伝える。 */
   function applySnapshot(s) {
-    if (!s) return;
+    if (!s) return { ok: false, msg: "ピンの内容がありません" };
+    let msg = null;
+    if (s.dataset && s.dataset !== datasetId()) msg = "別のデータで作ったピンです。戻せる範囲で戻しました";
     state.edgeMode = s.edgeMode || "all";
     state.granularity = s.granularity || "decl";
     state.baseDepth = s.baseDepth || 1;
     // 旧いピン（下錐を二つに割っていた頃）も読めるようにしておく
     state.refFilter = s.refFilter || (s.showRefValue === false ? "type" : "all");
     state.groupBy = s.groupBy || "subject";
-    state.sortMetric = s.sortMetric || "closure";
     if (s.previewFollow !== undefined) state.previewFollow = !!s.previewFollow;
     state.previewName = s.previewName || null;
     state.expanded = new Set(s.expanded || []);
     state.kindFilter = new Set(s.kindFilter || []);
     state.traceTarget = s.traceTarget || null;
     state.selected = s.selected || null;
+    state.openClusters = new Set(s.openClusters || []);
+    // 旧いピン（全開を旗で持っていた頃）は、集合を全入れにして読む
+    if (s.openAll) state.openClusters = new Set(baseIndices().facetOrigins);
     state.view = s.view ? { ...s.view } : { tx: 0, ty: 0, k: null };
-    if (s.center) histPush(s.center);
+    if (s.center) {
+      if (state.nodes[s.center]) histPush(s.center);
+      else msg = `中心 ${s.center} はこのデータにありません。中心以外を戻しました`;
+    }
     refresh(true);
+    return { ok: !msg, msg: msg || "ピンの状態に戻しました" };
   }
 
   /* ---------- 操作 ---------- */
@@ -763,32 +778,8 @@
       else if (state.selected) state.previewName = state.selected;
       emit();
     },
-    setSortMetric(m) { state.sortMetric = m; emit(); },
     setGroupBy(g) { state.groupBy = g; refresh(true); },
     setDensity(d) { state.density = d; refresh(); },
-    toggleView3d() {
-      state.view3d = !state.view3d;
-      state.view = { tx: 0, ty: 0, k: null };
-      refresh(true);
-    },
-    /** 正面に向ける経度。区画を押したときと、地球儀を回したときに動く。 */
-    setPhi(p) { state.phi = p; emit(); },
-    spinTo(lon) {
-      // 最短回りで目標へ。何周も回らせない。
-      let d = lon - state.phi;
-      while (d > Math.PI) d -= 2 * Math.PI;
-      while (d < -Math.PI) d += 2 * Math.PI;
-      state.phi += d;
-      emit();
-    },
-    /** 隣の区画へ一つ送る。経度は等分なので、送る量は常に同じ。 */
-    spinStep(dir) {
-      const list = derived.sectors || [];
-      if (!list.length) return;
-      const i = frontSectorIndex();
-      const j = ((i + dir) % list.length + list.length) % list.length;
-      actions.spinTo(list[j].lon);
-    },
     toggleHideFrame() { state.hideFrame = !state.hideFrame; refresh(true); },
     clearPath() { state.pathFrom = null; refresh(); },
     toggleDeriv(n) {
@@ -814,7 +805,7 @@
       refresh();
     },
     setQuery(q) { state.query = q; emit(); },
-    setListMode(m) { state.listMode = m; emit(); },
+    setListMode(m) { if (m === "tree" || m === "ns") { state.listMode = m; emit(); } },
     toggleTreeNode(prefix) {
       const s = new Set(state.treeClosed);
       s.has(prefix) ? s.delete(prefix) : s.add(prefix);
@@ -827,6 +818,28 @@
     },
     clearKinds() { state.kindFilter = new Set(); refresh(); },
     toggleOnlySorry() { state.onlySorry = !state.onlySorry; emit(); },
+    /* 派生の開閉（一覧とグラフで共有）。強制開放中の由来は押しても閉じないので、
+       黙って無視せず理由を返す（呼び出し元が通知に出す）。 */
+    toggleCluster(o) {
+      if (!o) return { ok: false, msg: "" };
+      if (forcedOpen().has(o)) {
+        const nd = state.nodes[centerName()];
+        const why = nd && nd.originRel === "facet" && nd.origin === o
+          ? "中心の由来なので、中心が派生であるあいだは開いたままにします"
+          : "経路表示の区間に派生が含まれるので、経路表示のあいだは開いたままにします";
+        return { ok: false, msg: `${o.split(".").slice(-1)[0]} の派生: ${why}` };
+      }
+      const s = new Set(state.openClusters);
+      s.has(o) ? s.delete(o) : s.add(o);
+      state.openClusters = s; refresh();
+      return { ok: true, msg: "" };
+    },
+    /* 「全て開く」は集合の全入れ／全消し。旗ではないので個別の開閉と干渉しない */
+    setOpenAll(v) {
+      state.openClusters = v ? new Set(baseIndices().facetOrigins) : new Set();
+      refresh();
+    },
+    toggleOpenAll() { actions.setOpenAll(!allFacetsOpen()); },
     setView(v) { state.view = v; emit(); },
     zoomBy(f, fit) {
       const cur = state.view.k == null ? fit : state.view.k;
@@ -846,7 +859,8 @@
     },
     applyPin(id) {
       const p = state.pins.find((x) => x.id === id);
-      if (p) applySnapshot(p.snap);
+      if (!p) return { ok: false, msg: "ピンが見つかりません" };
+      return applySnapshot(p.snap);
     },
     removePin(id) {
       state.pins = state.pins.filter((x) => x.id !== id);
@@ -871,32 +885,30 @@
     },
   };
 
-  /** いま正面を向いている区画の番号。経度が等分なので単純な最短距離で決まる。 */
-  function frontSectorIndex() {
-    const list = derived.sectors || [];
-    let best = -1, bestAbs = Infinity;
-    list.forEach((s, i) => {
-      let d = s.lon - state.phi;
-      while (d > Math.PI) d -= 2 * Math.PI;
-      while (d < -Math.PI) d += 2 * Math.PI;
-      if (Math.abs(d) < bestAbs) { bestAbs = Math.abs(d); best = i; }
-    });
-    return best;
-  }
-  function frontSector() {
-    const i = frontSectorIndex();
-    return i < 0 ? null : derived.sectors[i];
-  }
-
   /** プレビューに出す宣言。追従なら選択中、固定なら中心。 */
   function previewName() {
     if (!state.previewFollow) return centerName();
     return state.previewName || state.selected || centerName();
   }
 
+  /** 由来 o の派生が開いているか（個別、または強制）。一覧とグラフが同じ判定を使う。 */
+  function isClusterOpen(o) { return clusterOpen(o, forcedOpen()); }
+  /** 由来 o が強制的に開いているか（中心が派生／経路表示の区間に派生）。押しても閉じない。 */
+  function isClusterForced(o) { return forcedOpen().has(o); }
+  /** 派生を持つ全ての由来が（利用者の集合として）開いているか。「全て開く」の ☑ の判定。 */
+  function allFacetsOpen() {
+    const all = baseIndices().facetOrigins;
+    if (!all.size) return false;
+    for (const o of all) if (!state.openClusters.has(o)) return false;
+    return true;
+  }
+  /** 派生を持つ由来の数（「全て開く (N)」の N は派生の総数なので別。こちらは由来の数）。 */
+  function facetOriginCount() { return baseIndices().facetOrigins.size; }
+
   LDR.store = {
     state, actions, subscribe, refresh, metrics, groupKeyOf, previewName, METRICS,
-    lawInventory, frontSector, frontSectorIndex,
+    lawInventory, isClusterOpen, isClusterForced, allFacetsOpen, facetOriginCount,
+    openSignature: () => openSignature(),
     get derived() { return derived; },
     centerName, effCenter, histCur, snapshot, applySnapshot,
     NODE_W, NODE_H, GEO, SECTORS,

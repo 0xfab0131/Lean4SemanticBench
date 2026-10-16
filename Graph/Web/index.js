@@ -13,8 +13,10 @@
     el.textContent = msg;
     el.style.opacity = "1";
     clearTimeout(toastT);
-    toastT = setTimeout(() => { el.style.opacity = "0"; }, 2000);
+    // 長い通知（起動時の来歴など）は読み切れる時間まで残す
+    toastT = setTimeout(() => { el.style.opacity = "0"; }, msg.length > 40 ? 5000 : 2000);
   }
+  LDR.toast = toast;     // キャンバス側（固定で開いている由来を押したとき等）も同じ通知を使う
 
   /* ---------- テーマ ---------- */
   function applyTheme(dark) {
@@ -29,9 +31,14 @@
   function onClick(e) {
     const t = e.target.closest(
       "[data-nav],[data-sel],[data-trace],[data-tab],[data-kind],[data-edge],[data-gran]," +
-      "[data-ref],[data-list],[data-audit],[data-tree],[data-hist],[data-pin],[data-unpin]," +
-      "[data-metric],[data-group],[data-density],[data-preview],[data-follow],[data-deriv],[data-spin]");
+      "[data-ref],[data-list],[data-filter],[data-tree],[data-hist],[data-pin],[data-unpin]," +
+      "[data-group],[data-density],[data-preview],[data-follow],[data-deriv],[data-cluster]");
     if (!t) return;
+    if (t.dataset.cluster !== undefined) {
+      const r = S.actions.toggleCluster(t.dataset.cluster);
+      if (r && !r.ok && r.msg) toast(r.msg);      // 固定で開いている由来は閉じない。理由を伝える
+      return;
+    }
     if (t.dataset.nav !== undefined) { S.actions.navigate(t.dataset.nav); return; }
     if (t.dataset.sel !== undefined) {
       // 単クリック = 選択（比較のために覗くだけ。履歴は動かない）
@@ -49,18 +56,17 @@
     if (t.dataset.gran !== undefined) { S.actions.setGranularity(t.dataset.gran); return; }
     if (t.dataset.ref !== undefined) { S.actions.setRefFilter(t.dataset.ref); return; }
     if (t.dataset.list !== undefined) { S.actions.setListMode(t.dataset.list); return; }
-    if (t.dataset.metric !== undefined) { S.actions.setSortMetric(t.dataset.metric); return; }
     if (t.dataset.group !== undefined) { S.actions.setGroupBy(t.dataset.group); return; }
     if (t.dataset.density !== undefined) { S.actions.setDensity(+t.dataset.density); return; }
     if (t.dataset.preview !== undefined) { S.actions.preview(t.dataset.preview); return; }
     if (t.dataset.deriv !== undefined) { S.actions.toggleDeriv(t.dataset.deriv); return; }
-    if (t.dataset.spin !== undefined) { S.actions.spinStep(+t.dataset.spin); return; }
     if (t.dataset.follow !== undefined) { S.actions.setPreviewFollow(t.dataset.follow === "1"); return; }
     if (t.dataset.tree !== undefined) { S.actions.toggleTreeNode(t.dataset.tree); return; }
     if (t.dataset.hist !== undefined) { S.actions.jumpHist(t.dataset.hist); return; }
-    if (t.dataset.pin !== undefined) { S.actions.applyPin(t.dataset.pin); toast("ピンの状態に戻しました"); return; }
+    if (t.dataset.pin !== undefined) { toast(S.actions.applyPin(t.dataset.pin).msg); return; }
     if (t.dataset.unpin !== undefined) { S.actions.removePin(t.dataset.unpin); return; }
-    if (t.dataset.audit === "sorry") { S.actions.toggleOnlySorry(); return; }
+    if (t.dataset.filter === "sorry") { S.actions.toggleOnlySorry(); return; }
+    if (t.dataset.filter === "openall") { S.actions.toggleOpenAll(); return; }
   }
 
   /* ---------- キーボード ---------- */
@@ -84,12 +90,6 @@
     if (e.key === "-") { C.zoomOut(); return; }
     if (e.key === "Escape") { S.actions.setTrace(null); S.actions.clearPath(); return; }
     if (k === "f") { toggleFocus(); return; }
-    if (k === "b") { S.actions.toggleView3d(); return; }
-    // 経度は等分なので、一押しで隣の区画へちょうど送れる
-    if (S.state.view3d && (e.key === "[" || e.key === "]")) {
-      S.actions.spinStep(e.key === "[" ? -1 : 1);
-      return;
-    }
     if (k === "t") { S.actions.setEdgeMode(S.state.edgeMode === "all" ? "type" : "all"); return; }
     if (k === "m") { S.actions.setGranularity(S.state.granularity === "decl" ? "module" : "decl"); return; }
     if (k === "v") { S.actions.cycleRefFilter(); return; }
@@ -214,20 +214,49 @@
       el.style.width = Math.max(190, Math.min(Number.isFinite(saved) ? saved : def, cap)) + "px";
     }
 
-    $("depTabs").dataset.tab = "type";
+    // 右パネルは「見ている宣言」のプレビューから始める（依存の一覧はタブで切り替える）
+    $("depTabs").dataset.tab = "prev";
 
-    /* 読み込みの優先順位: 前回の保持 → 既定の監査結果 → サンプル。
-       毎回 5 MB を投げ直させないための順序。 */
+    /* 読み込みの優先順位。
+         1. 既定の監査結果が「前回起動時に見たもの」から変わっていれば、それを読む。
+            解析を回し直して埋め込みが新しくなったのに、古い保持データを復元して
+            見せ続けると「直したのに変わらない」という誤認を生む（実際に起きた。
+            toast で伝えるだけでは足りなかった）。保持データもこれで置き換える。
+         2. 変わっていなければ、前回の保持（利用者が貼り付けた別データ等）を復元する。
+         3. どちらも無ければ既定の監査結果、それも無ければサンプル。
+       既定の同一性は長さとハッシュの指紋で見る。文字列比較より安く、保持側が
+       既定と同じ内容かどうかも同じ指紋で判定できる。 */
+    const fingerprint = (t) => {
+      let h = 2166136261;
+      for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); }
+      return t.length + ":" + (h >>> 0).toString(16);
+    };
     let initial = null, source = "";
+    let persisted = null;
     try {
       const t = await DB.get("report");
-      if (typeof t === "string" && t.trim()) { initial = t; source = "前回のレポートを復元しました"; }
+      if (typeof t === "string" && t.trim()) persisted = t;
     } catch (e) { /* 保持が使えなくても動作は続ける */ }
-    if (!initial) {
-      const d = await getDefaultReport();
-      if (d) { initial = d; source = "既定の監査結果を読み込みました"; }
+    const def = await getDefaultReport();
+    const defFp = def ? fingerprint(def) : null;
+    const seenFp = localStorage.getItem("ldr-default-fp");
+    if (def && defFp !== seenFp) {
+      initial = def;
+      source = seenFp
+        ? "既定の監査結果が更新されていたので読み込みました（前回の保持データは置き換え）"
+        : "既定の監査結果を読み込みました";
+      localStorage.setItem("ldr-default-fp", defFp);
+      saveData(def);
+    } else if (persisted) {
+      initial = persisted;
+      source = (def && fingerprint(persisted) !== defFp)
+        ? "前回のレポートを復元しました（既定の監査結果とは別の内容。データ → 既定 で切り替え）"
+        : "前回のレポートを復元しました";
+    } else if (def) {
+      initial = def; source = "既定の監査結果を読み込みました";
+    } else {
+      initial = LDR.SAMPLE; source = "サンプルを表示しています（データボタンから読み込めます）";
     }
-    if (!initial) { initial = LDR.SAMPLE; source = "サンプルを表示しています（データボタンから読み込めます）"; }
 
     S.actions.loadText(initial, { silent: true });
     try {
@@ -271,7 +300,6 @@
     $("btnFwd").addEventListener("click", S.actions.forward);
     $("btnCollapse").addEventListener("click", S.actions.collapseAll);
     $("btnFrame").addEventListener("click", S.actions.toggleHideFrame);
-    $("btnSphere").addEventListener("click", S.actions.toggleView3d);
     $("btnZoomIn").addEventListener("click", C.zoomIn);
     $("btnZoomOut").addEventListener("click", C.zoomOut);
     $("btnFit").addEventListener("click", C.reset);

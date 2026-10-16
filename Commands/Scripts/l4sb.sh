@@ -7,7 +7,7 @@
 # 使い方は `l4sb.sh help` または Commands/Scripts/README.md を参照。
 #
 # 原理(環境同一性):
-#   decl_report は解析対象の olean を Lean.withImportModules で読む。
+#   decl_report は解析対象の olean を Lean.importModules (loadExts := true) で読む。
 #   したがって「解析器を作った toolchain」=「対象をビルドした toolchain」、
 #   「解析器が読む依存の実体」=「対象がビルドされた実体」でなければならない。
 #   これを規約でなく構成で保証するため、対象の内側に衛星ワークスペース

@@ -1,7 +1,6 @@
 import Lean
-import ImportGraph.Imports.RequiredModules
+import ImportGraph.Lean.Environment
 import ImportGraph.Imports.Redundant
-import Std.Data.TreeSet.Basic
 
 /-
   LeanDeclReport / Basic.lean
@@ -20,9 +19,10 @@ import Std.Data.TreeSet.Basic
                        lean4#8842 以降、公理の型が参照する公理も辿る。
     - 内部宣言の判定 : `Name.isInternalDetail`（core、Lean 4.10.0 の #4454 で公開）
     - モジュール特定 : `Environment.getModuleFor?`（ImportGraph）
-    - 推移的依存     : `Name.transitivelyUsedConstants`（ImportGraph, CoreM NameSet）
-    - 必要モジュール : `Name.requiredModules` / `Name.transitivelyRequiredModules`
-                       （ImportGraph）
+    - 冗長 import    : `Environment.findRedundantImports`（ImportGraph）
+  推移的な依存は自前の BFS（`downwardClosure`）で辿る。型と値の両方を
+  `allowOpaque := true` で辿るので、定理の証明項にしか現れない依存も落とさない。
+  必要モジュールもその閉包から集める（ImportGraph の推移閉包は使わない）。
 -/
 
 open Lean Lean.Meta
@@ -49,14 +49,39 @@ structure BinderView where
   prop : Bool := false
   deriving Inhabited
 
+/-- 定数 `n` の型の先頭 `k` 個の束縛情報。Π 連鎖を剥がすだけで簡約はしない。
+    `Eq : {α : Sort u} → α → α → Prop` なら `#[implicit, default, default]`。 -/
+private def binderInfosOf (env : Environment) (n : Name) (k : Nat) : Array BinderInfo :=
+  match env.find? n with
+  | none    => #[]
+  | some ci => go ci.type k #[]
+where
+  go : Expr → Nat → Array BinderInfo → Array BinderInfo
+    | .forallE _ _ b bi, k+1, acc => go b k (acc.push bi)
+    | _,                 _,   acc => acc
+
 /-- `R … a b` の形を (R, a, b) に分ける。二項の適用を読むための入口で、
-    関係にも二項演算にも使う。`mdata` は先に剥がす。 -/
-def asBinApp (e0 : Expr) : Option (Name × Expr × Expr) :=
+    関係にも二項演算にも使う。`mdata` は先に剥がす。
+
+    末尾二つの引数が **明示引数** であることを、頭部定数の束縛情報で確かめる。
+    単に末尾二つを取ると、`Nat.cast {R} [NatCast R] n` のような単項の写像が
+    「インスタンスと n の二項演算」に見え、`↑(n + m) = ↑n + ↑m` を分配律
+    f x (g p q) = g (f x p) (f x q) の x にインスタンスを入れた形として誤認する
+    （フィクスチャの導出図で `Int.natCast_add` に実測）。法則の担い手は元で
+    なければならない。束縛情報が引数の数まで取れない（型が Π 連鎖で書かれて
+    いない）ときは「誤って付けない」向きに倒し、二項とは見なさない。 -/
+def asBinApp (env : Environment) (e0 : Expr) : Option (Name × Expr × Expr) :=
   let e := e0.consumeMData
   match e.getAppFn with
   | .const r _ =>
     let args := e.getAppArgs
-    if args.size ≥ 2 then some (r, args[args.size - 2]!, args[args.size - 1]!) else none
+    let k := args.size
+    if k ≥ 2 then
+      let infos := binderInfosOf env r k
+      if infos.size == k && infos[k - 2]! == .default && infos[k - 1]! == .default then
+        some (r, args[k - 2]!, args[k - 1]!)
+      else none
+    else none
   | _ => none
 
 /-- 比較は reducible 透明度の defeq で行う。
@@ -67,6 +92,31 @@ def asBinApp (e0 : Expr) : Option (Name × Expr × Expr) :=
 private def eqv (a b : Expr) : MetaM Bool := do
   if a == b then return true   -- 構造等価の高速路。defeq(heartbeat 消費源)を避ける
   try Meta.withReducible (Meta.isDefEq a b) catch _ => pure false
+
+/-- 担い手の型の頭部定数。`join m n` なら `m : Nat` の `Nat`、`instLENat.le a b` も `Nat`。
+    変数や Sort（多相な主張、命題同士の同値）のときは anonymous。
+    法則の在庫表で「どの型の上の関係か」を行の鍵に加えるために使う。
+    頭部定数だけを鍵にすると、`Nat` の反射と `Int` の推移が同じ行に合流する。 -/
+private def carrierOf (x : Expr) : MetaM Name := do
+  try
+    let t ← Meta.inferType x
+    pure (match t.consumeMData.getAppFn with | .const n _ => n | _ => Name.anonymous)
+  catch _ => pure Name.anonymous
+
+/-- `f xs` と `f ys` が同じ写像 `f` による `x` と `y` の像か。
+    ある位置 `i` で `xs[i] ≡ x` かつ `ys[i] ≡ y`、他の位置では `xs[j] ≡ ys[j]`。
+    `k + m` と `k + n` は `(m, n)` の像（`HAdd.hAdd Nat Nat Nat inst k ·`）だが、
+    `a = a'` と `b = b'` は（頭部は共に `Eq` でも）どの `(x, y)` の像でもない。 -/
+private def isImagePair (xs ys : Array Expr) (x y : Expr) : MetaM Bool := do
+  if xs.size != ys.size then return false
+  for i in [:xs.size] do
+    if (← eqv xs[i]! x) && (← eqv ys[i]! y) then
+      let mut others := true
+      for j in [:xs.size] do
+        if j != i && others then
+          unless (← eqv xs[j]! ys[j]!) do others := false
+      if others then return true
+  return false
 
 /-- 主張の形を判定する。
 
@@ -81,83 +131,98 @@ private def eqv (a b : Expr) : MetaM Bool := do
       total              R a b ∨ R b a （全域性。枠が ∨ のときのチャージ先）
       comm / assoc / idem  二項演算の可換・結合・冪等（枠は = / ↔ に限る）
       absorb / distrib   二演算の吸収・分配。第二の担い手も返す
-      mono               関係の仮定があり、結論の両辺が同じ頭部の像
+      mono               R x y  ⟹  R (f x) (f y)。仮定と結論が同じ関係 R で、
+                         結論の両辺が同じ f による x, y の像（isImagePair）。
+                         担い手は f、第三成分にその関係 R を入れる
 
     各判定は主張を (枠, 担い手, 法則) へ写すチャージであり、枠(外側の結合子)を
     検査してから担い手を確定する。反対称律は結論が `Eq` / `Iff` で対象の関係が
     仮定側にあり、全域性は枠が `∨`。枠を見ずにチャージすると、全域性を可換と
     誤認するような取り違えが起きる（検証フィクスチャで実測済み）。
-    返り値の第三成分は二演算法則（吸収・分配）の相方で、単独法則では anonymous。 -/
-def relShape (hyps : Array Expr) (body0 : Expr) : MetaM (String × Name × Name) := do
+
+    返り値は (形, 担い手, 相方, 担い手の型)。相方は吸収・分配では第二の演算、
+    単調では関係、それ以外は anonymous。担い手の型は `carrierOf`。 -/
+def relShape (hyps : Array Expr) (body0 : Expr) : MetaM (String × Name × Name × Name) := do
+  let env ← getEnv
   let body := body0.consumeMData
-  let none : String × Name × Name := ("", Name.anonymous, Name.anonymous)
-  -- 非反射律は否定の内側を見る
-  if let some (n, _) := body.const? then
-    if n == ``Not then
-      if let some inner := body.getAppArgs[0]? then
-        if let some (r0, a0, b0) := asBinApp inner then
-          if ← eqv a0 b0 then return ("irrefl", r0, Name.anonymous)
-  let some (r, a, b) := asBinApp body | return none
-  if ← eqv a b then return ("refl", r, Name.anonymous)
-  let rels := hyps.map (·.consumeMData) |>.filterMap asBinApp
+  let none : String × Name × Name × Name := ("", Name.anonymous, Name.anonymous, Name.anonymous)
+  -- 非反射律は否定の内側を見る。`Not p` は適用であって裸の定数ではないので、
+  -- core の認識子 `not?`（`isAppOfArity Not 1` で剥がす）を使う。
+  if let some inner := body.not? then
+    if let some (r0, a0, b0) := asBinApp env inner then
+      if ← eqv a0 b0 then return ("irrefl", r0, Name.anonymous, ← carrierOf a0)
+  let some (r, a, b) := asBinApp env body | return none
+  if ← eqv a b then return ("refl", r, Name.anonymous, ← carrierOf a)
+  let rels := hyps.map (·.consumeMData) |>.filterMap (asBinApp env)
 
   if r == ``Eq || r == ``Iff then
     for p in rels do
       for q in rels do
         if p.1 == q.1 then
           if (← eqv p.2.1 a) && (← eqv p.2.2 b) && (← eqv q.2.1 b) && (← eqv q.2.2 a) then
-            return ("antisymm", p.1, Name.anonymous)   -- 対象の関係は仮定側にある
+            return ("antisymm", p.1, Name.anonymous, ← carrierOf a)   -- 対象の関係は仮定側にある
   for p in rels do
     if p.1 == r then
-      if (← eqv p.2.1 b) && (← eqv p.2.2 a) then return ("symm", r, Name.anonymous)
+      if (← eqv p.2.1 b) && (← eqv p.2.2 a) then return ("symm", r, Name.anonymous, ← carrierOf a)
   for p in rels do
     for q in rels do
       if p.1 == r && q.1 == r then
         if (← eqv p.2.1 a) && (← eqv q.2.2 b) && (← eqv p.2.2 q.2.1) then
-          return ("trans", r, Name.anonymous)
+          return ("trans", r, Name.anonymous, ← carrierOf a)
 
   -- 全域性: R x y ∨ R y x。引数の入替は可換と同形だが、枠が ∨ のときは
   -- 演算の可換ではなく関係の全域性(線形性)としてチャージする。
   if r == ``Or then
-    if let some (r1, x1, y1) := asBinApp a then
-      if let some (r2, x2, y2) := asBinApp b then
+    if let some (r1, x1, y1) := asBinApp env a then
+      if let some (r2, x2, y2) := asBinApp env b then
         if r1 == r2 then
-          if (← eqv x1 y2) && (← eqv y1 x2) then return ("total", r1, Name.anonymous)
+          if (← eqv x1 y2) && (← eqv y1 x2) then return ("total", r1, Name.anonymous, ← carrierOf x1)
 
   -- 二項演算の法則(可換・結合・冪等・吸収・分配)は、結論が等式・同値の
   -- 形の場合に限る。外側の枠を制限しないと、全域性 `R a b ∨ R b a` のような
   -- 主張まで「可換」と誤判定する(検証フィクスチャで実測)。
   -- 判定は「誤って付けない」向きに倒す、という原則の適用である。
   if r == ``Eq || r == ``Iff then
-    if let some (f, x, y) := asBinApp a then
-      if let some (g, u, v) := asBinApp b then
+    if let some (f, x, y) := asBinApp env a then
+      if let some (g, u, v) := asBinApp env b then
         if f == g then
-          if (← eqv x v) && (← eqv y u) then return ("comm", f, Name.anonymous)
-          if let some (f', x', y') := asBinApp x then
-            if let some (g', u', v') := asBinApp v then
+          if (← eqv x v) && (← eqv y u) then return ("comm", f, Name.anonymous, ← carrierOf x)
+          if let some (f', x', y') := asBinApp env x then
+            if let some (g', u', v') := asBinApp env v then
               if f' == f && g' == f then
                 if (← eqv x' u) && (← eqv y' u') && (← eqv y v') then
-                  return ("assoc", f, Name.anonymous)
+                  return ("assoc", f, Name.anonymous, ← carrierOf x)
         else
           -- 分配律: f x (g p q) = g (f x p) (f x q)。担い手は対 (f, g)。
-          if let some (g', p, q) := asBinApp y then
+          if let some (g', p, q) := asBinApp env y then
             if g' == g then
-              if let some (fl, xl, pl) := asBinApp u then
-                if let some (fr, xr, qr) := asBinApp v then
+              if let some (fl, xl, pl) := asBinApp env u then
+                if let some (fr, xr, qr) := asBinApp env v then
                   if fl == f && fr == f then
                     if (← eqv xl x) && (← eqv xr x) && (← eqv pl p) && (← eqv qr q) then
-                      return ("distrib", f, g)
+                      return ("distrib", f, g, ← carrierOf x)
       -- 吸収律: f x (g x w) = x。担い手は対 (f, g)。
       -- 二つの半束 (⊔, ⊓) を一つの束へ融合する、対をまたぐ法則。
-      if let some (g2, u2, _) := asBinApp y then
+      if let some (g2, u2, _) := asBinApp env y then
         if g2 != f then
-          if (← eqv u2 x) && (← eqv b x) then return ("absorb", f, g2)
-      if (← eqv x y) && (← eqv b x) then return ("idem", f, Name.anonymous)
+          if (← eqv u2 x) && (← eqv b x) then return ("absorb", f, g2, ← carrierOf x)
+      if (← eqv x y) && (← eqv b x) then return ("idem", f, Name.anonymous, ← carrierOf x)
 
-  if !rels.isEmpty then
-    match a.getAppFn, b.getAppFn with
-    | .const f _, .const g _ => if f == g then return ("mono", f, Name.anonymous)
-    | _, _ => pure ()
+  -- 単調: 仮定 R x y があり、結論が同じ関係 R の下で f x と f y について述べている。
+  -- 枠 r（例: le'）が「どの関係について単調か」なので、相方の位置に入れる。
+  -- 「結論の両辺の頭部が同じ」だけでは、単射性 `mk a b = mk a' b' → a = a' ∧ b = b'`
+  -- （両辺の頭部は共に Eq、仮定の関係は Eq で枠は And）まで単調と誤認する
+  -- （自己解析の `DirectDeps.mk.inj` で実測）。像であることまで確かめる。
+  match a.getAppFn, b.getAppFn with
+  | .const f _, .const g _ =>
+    if f == g then
+      let xs := a.getAppArgs
+      let ys := b.getAppArgs
+      for p in rels do
+        if p.1 == r then
+          if ← isImagePair xs ys p.2.1 p.2.2 then
+            return ("mono", f, r, ← carrierOf a)
+  | _, _ => pure ()
   return none
 
 /-- 明示引数・暗黙引数・型クラス制約を区別した入力構造。 -/
@@ -181,29 +246,40 @@ structure ArgClassification where
   shape        : String := ""
   /-- その形が「どの関係・演算についてのものか」。法則の在庫表の行になる。 -/
   shapeRel     : Name := Name.anonymous
-  /-- 二演算法則(吸収・分配)の相方。単独法則では anonymous。 -/
+  /-- 二演算法則(吸収・分配)の相方。単調では関係。単独法則では anonymous。 -/
   shapeRel2    : Name := Name.anonymous
+  /-- 担い手の型の頭部（`Nat` など）。多相な主張では anonymous。 -/
+  shapeType    : Name := Name.anonymous
 
 /-- 結論の頭部が論理的な包み（`Eq` など）なら、その中身の頭部まで降りる。
     「この定理は何についての主張か」を一語で言うための鍵になる。 -/
 private def wrapperHeads : NameSet :=
   [``Eq, ``Iff, ``HEq, ``And, ``Or, ``Not, ``Exists, ``Ne].foldl (·.insert ·) {}
 
-partial def subjectOf (e : Expr) : Name :=
-  let f := e.getAppFn
-  match f with
-  | .const n _ =>
-    if wrapperHeads.contains n then
-      -- 型引数を飛ばして最初の意味のある引数へ降りる
-      let args := e.getAppArgs
-      let rec pick (i : Nat) : Name :=
-        if h : i < args.size then
-          let s := subjectOf args[i]
-          if s != Name.anonymous && s != n then s else pick (i + 1)
-        else n
-      pick 0
-    else n
-  | _ => Name.anonymous
+/-- 主題。頭部が包みなら、その包みの **明示引数** のうち最初に主題を持つものへ降りる。
+    `Eq {α} a b` の `α` は型であって主題ではないので飛ばす（飛ばさないと、`Nat` 上の
+    等式が全て主題 `Nat` になり、主題での束ねが型での束ねに退化する。実測）。
+    明示・暗黙は包みの定数の型の束縛情報で判定する。λ・∀ の本体へは透過する
+    （`Exists fun x => R x x` の主題は `R`）。 -/
+partial def subjectOf (env : Environment) : Expr → Name
+  | .mdata _ e       => subjectOf env e
+  | .lam _ _ b _     => subjectOf env b
+  | .forallE _ _ b _ => subjectOf env b
+  | e =>
+    match e.getAppFn with
+    | .const n _ =>
+      if wrapperHeads.contains n then
+        let args := e.getAppArgs
+        let infos := binderInfosOf env n args.size
+        let rec pick (i : Nat) : Name :=
+          if h : i < args.size then
+            let explicit := (infos[i]?.map (· == .default)).getD true
+            let s := if explicit then subjectOf env args[i] else Name.anonymous
+            if s != Name.anonymous && s != n then s else pick (i + 1)
+          else n
+        pick 0
+      else n
+    | _ => Name.anonymous
 
 /-- 型 `e` を Π 型の連鎖として展開し、各引数を `BinderInfo` に応じて分類する。
 
@@ -213,6 +289,7 @@ partial def subjectOf (e : Expr) : Name :=
     段階的縮退のための旗。形は元々「判定できなければ空」が定義済みの意味論。 -/
 def classifyArgs (e : Expr) (withShapes : Bool := true) : MetaM ArgClassification :=
   Meta.forallTelescope e fun fvars body => do
+    let env ← getEnv
     let mut binders : Array BinderView := #[]
     let mut hyps : Array Expr := #[]
     let mut nE := 0; let mut nI := 0; let mut nC := 0; let mut nH := 0
@@ -240,23 +317,27 @@ def classifyArgs (e : Expr) (withShapes : Bool := true) : MetaM ArgClassificatio
       match a.getAppFn with
       | .const n _ => n
       | _          => Name.anonymous
-    let (shape, shapeRel, shapeRel2) ←
-      if withShapes then
-        try relShape hyps body catch _ => pure ("", Name.anonymous, Name.anonymous)
+    /- 形の判定は命題にだけ行う。型クラスのインスタンス `C α α` は構文上は反射の
+       形を持つがデータであって証明ではない（自己解析で `instHAdd` 等に実測）。
+       Π 型が命題であることと本体が命題であることは同値なので、本体で判定する。 -/
+    let bodyIsProp ← try Meta.isProp body catch _ => pure false
+    let noShape := ("", Name.anonymous, Name.anonymous, Name.anonymous)
+    let (shape, shapeRel, shapeRel2, shapeType) ←
+      if withShapes && bodyIsProp then
+        try relShape hyps body catch _ => pure noShape
       else
-        pure ("", Name.anonymous, Name.anonymous)
+        pure noShape
     return {
       binders, numExplicit := nE, numImplicit := nI, numInst := nC, numHyp := nH,
-      conclusion := concl, subject := subjectOf body, head, conclArgs,
-      shape, shapeRel, shapeRel2
+      conclusion := concl, subject := subjectOf env body, head, conclArgs,
+      shape, shapeRel, shapeRel2, shapeType
     }
 
 /-! ## 直接依存する定数
 
 `Lean.Expr.foldConsts (e) (init) (f : Name → α → α)` で型と値の両方から集める。
-ImportGraph の `Name.transitivelyUsedConstants` は推移閉包を返すが、
-ここでは 1 段だけの直接依存が欲しいので `foldConsts` を直接使う。
-（推移閉包は下方閉集合の構築時に層ごとに辿る形で得る。） -/
+ここで欲しいのは 1 段だけの直接依存で、推移閉包は下方閉集合の構築時に
+層ごとに辿る形で得る（`downwardClosure`）。 -/
 
 def collectConsts (e : Expr) : NameSet :=
   e.foldConsts ({} : NameSet) fun n acc => acc.insert n
@@ -351,22 +432,111 @@ partial def exprSizeAux : Nat → List Expr → Nat → Nat
 
 def exprSize (e : Expr) (fuel : Nat := 400000) : Nat := exprSizeAux fuel [e] 0
 
+/-! ## 由来（成員・派生・断片）
+
+`structure Pair` を書くと、Lean は利用者が書いていない宣言を追加する（`casesOn` / `rec` /
+`ctorIdx` / `noConfusion*` / `mk.inj` / `mk.injEq` / `mk.sizeOf_spec` / `_sizeOf_*`）。`omega` は
+`_proof_<i>` を、`match` は `match_<i>` を切り出す。各宣言について「どの宣言から作られたか」
+（由来 origin）、「何か」（kind）、「元の定義とどう関係するか」（rel）を **環境の事実** から決める。
+名前で推測するのは `noConfusionType` だけ（命名関数 `mkNoConfusionTypeName` が core で非公開）。
+
+    rel = member  構成子・射影。定義の一部として利用者が書いたもの
+    rel = facet   由来から機械的に導かれる **別の宣言**（単射性・互いに素・再帰子・等式補題…）
+    rel = part    由来の証明・本体の **一部** を切り出したもの（`_proof_<i>` / `match_<i>` …）
+
+由来の写像 π は手書きの宣言の上で恒等（レトラクション）。facet の由来は手書きの宣言または
+成員で、facet の facet は作らない（`Pair.mk.inj` の由来は構成子 `Pair.mk`）。
+
+`findDeclarationRanges?` は補助再帰子・noConfusion・再帰子に対して **親の範囲を返す**
+（core `DeclarationRange.lean`）ので、「範囲が無い＝生成物」という判定はしない。
+`deriving` のインスタンスは範囲を持ち、core に由来の記録が無いので手書きと区別しない（限界）。 -/
+
+structure OriginInfo where
+  origin : Name := Name.anonymous
+  kind   : String := ""
+  rel    : String := ""
+  deriving Inhabited
+
+/-- 最も近い接頭辞で、帰納型または構成子であるもの。補助再帰子・noConfusion の由来。 -/
+private partial def nearestIndOrCtor (env : Environment) (n : Name) : Option Name :=
+  match n with
+  | .anonymous => none
+  | .str p _ | .num p _ =>
+    match env.find? p with
+    | some (.inductInfo _) => some p
+    | some (.ctorInfo _)   => some p
+    | _                    => nearestIndOrCtor env p
+
+/-- 最も近い接頭辞で、環境に存在し内部名でない宣言。断片（`foo._proof_1_1` → `foo`）の由来。 -/
+private partial def nearestUserDecl (env : Environment) (n : Name) : Option Name :=
+  match n with
+  | .anonymous => none
+  | .str p _ | .num p _ =>
+    if env.contains p && !p.isInternalDetail then some p else nearestUserDecl env p
+
+/-- 宣言 `n` の由来。判定は具体的なものから順に、core の判定子で行う。 -/
+def originOf (n : Name) : MetaM OriginInfo := do
+  let env ← getEnv
+  let mk (o : Name) (k r : String) : OriginInfo := { origin := o, kind := k, rel := r }
+  let isInd (m : Name) : Bool := env.find? m matches some (.inductInfo _)
+  let isCtor (m : Name) : Bool := env.find? m matches some (.ctorInfo _)
+  -- 構成子・再帰子はカーネルの宣言そのもの
+  match env.find? n with
+  | some (.ctorInfo v) => return mk v.induct "constructor" "member"
+  | some (.recInfo _)  => if isInd n.getPrefix then return mk n.getPrefix "rec" "facet"
+  | _ => pure ()
+  -- 補助再帰子（casesOn / recOn / brecOn / ctorElim / ctor.elim）。拡張のタグで判定
+  if isAuxRecursor env n then
+    let k := if isCasesOnRecursor env n then "casesOn"
+             else if isRecOnRecursor env n then "recOn"
+             else if isBRecOnRecursor env n then "brecOn"
+             else "auxRec"
+    if let some o := nearestIndOrCtor env n then return mk o k "facet"
+  if isNoConfusion env n then
+    if let some o := nearestIndOrCtor env n then return mk o "noConfusion" "facet"
+  if (isCtorIdxCore? env n).isSome then return mk n.getPrefix "ctorIdx" "facet"
+  if let .str p "noConfusionType" := n then
+    if isInd p then return mk p "noConfusionType" "facet"
+  -- 構造体の射影は、利用者が書いたフィールドに対応する成員
+  if env.isProjectionFn n then
+    if let some s := env.getProjectionStructureName? n then return mk s "projection" "member"
+  if let .str p s := n then
+    if isCtor p then
+      if n == mkInjectiveTheoremNameFor p then return mk p "inj" "facet"
+      if n == mkInjectiveEqTheoremNameFor p then return mk p "injEq" "facet"
+      if n == mkHInjectiveTheoremNameFor p then return mk p "hinj" "facet"
+      if n == mkSizeOfSpecLemmaName p then return mk p "sizeOf_spec" "facet"
+    if isInd p then
+      if s == "_sizeOf_inst" then return mk p "sizeOf_inst" "facet"
+      if s.startsWith "_sizeOf_" then return mk p "sizeOf" "facet"
+  -- 断片: match の補助、証明の切り出し
+  if isMatcherCore env n then
+    if let some o := nearestUserDecl env n then return mk o "matcher" "part"
+  -- 等式補題（遅延生成。登録表に無ければ予約名から）
+  if let some d ← isEqnThm? n then return mk d "eqn" "facet"
+  if let some (d, _) := declFromEqLikeName env n then return mk d "eqn" "facet"
+  if let .str _ s := n then
+    if ["_proof", "proof_", "_sparseCasesOn", "_unary", "_mutual"].any (s.startsWith ·) then
+      if let some o := nearestUserDecl env n then return mk o "proof" "part"
+  if n.isInternalDetail then
+    if let some o := nearestUserDecl env n then return mk o "internal" "part"
+  return {}
+
 /-- 宣言が書かれている行。`Lean.findDeclarationRanges?`（core）で取る。
     これが無いと「実装順」を再現できず、名前順で代用するしかなくなる。
 
-    構造体のコンパイラ生成宣言（`.ctorIdx` / `.noConfusionType` 等）は自前の
-    range を持たない（自己解析で 33 件を実測）。その場合は親（所属する
-    構造体など）の行へフォールバックし、実装順の再現を生成物にも及ぼす。 -/
-def declLine (n : Name) : MetaM Nat := do
+    生成物（`.ctorIdx` / `.noConfusionType` / `.injEq` 等）は自前の range を持たない
+    （自己解析で 33 件を実測。補助再帰子・noConfusion・再帰子は core が親の範囲を返す）。
+    その場合は **由来** の行へ落とし（由来が無ければ接頭辞）、実装順の再現を派生にも及ぼす。 -/
+def declLine (n : Name) (origin : Name := Name.anonymous) : MetaM Nat := do
   match ← Lean.findDeclarationRanges? n with
   | some r => return r.range.pos.line
   | none   =>
-    match n with
-    | .str p _ =>
-      match ← Lean.findDeclarationRanges? p with
-      | some r => return r.range.pos.line
-      | none   => return 0
-    | _ => return 0
+    let p := if origin.isAnonymous then n.getPrefix else origin
+    if p.isAnonymous then return 0
+    match ← Lean.findDeclarationRanges? p with
+    | some r => return r.range.pos.line
+    | none   => return 0
 
 /-- 帰納型なら構成子、構造体ならフィールド。「この宣言が属する型」を辿る手掛かり。 -/
 def membersOf (env : Environment) (ci : ConstantInfo) : Array Name :=
@@ -430,8 +600,10 @@ structure DeclReport where
   shape       : String
   /-- その形がどの関係・演算についてのものか。 -/
   shapeRel    : Name
-  /-- 二演算法則(吸収・分配)の相方。単独法則では anonymous。 -/
+  /-- 二演算法則(吸収・分配)の相方。単調では関係。単独法則では anonymous。 -/
   shapeRel2   : Name
+  /-- 担い手の型の頭部（`Nat` など）。多相な主張では anonymous。在庫表の行の鍵に使う。 -/
+  shapeType   : Name
   /-- `[reducible]` などの可簡約性。`abbrev` と `def` の区別がここに出る。 -/
   reducibility : String
   /-- 宣言が書かれている行。0 は不明。 -/
@@ -448,6 +620,14 @@ structure DeclReport where
   members     : Array Name
   /-- 証明項・実装の pretty print。`--values` を付けたときだけ入る（上限付き）。 -/
   valueString : String
+  /-- 由来: この宣言を作った元の宣言（手書きなら anonymous）。`originOf` 参照。 -/
+  origin      : Name
+  /-- 由来の種類: constructor / projection / rec / casesOn / recOn / brecOn / auxRec / noConfusion /
+      noConfusionType / ctorIdx / inj / injEq / hinj / sizeOf_spec / sizeOf_inst / sizeOf / matcher /
+      eqn / proof / internal。手書きなら空。 -/
+  originKind  : String
+  /-- 由来との関係: member（成員）/ facet（派生）/ part（断片）。手書きなら空。 -/
+  originRel   : String
 
 instance : ToString DeclReport where
   toString r :=
@@ -462,6 +642,9 @@ instance : ToString DeclReport where
     s!"  depModules := {r.depModules.toList}\n" ++
     s!"  line       := {r.line}  universe := {r.numUniverse}  instance := {r.isInstance}\n" ++
     s!"  size       := 型 {r.typeSize} / 値 {r.valueSize}\n" ++
+    s!"  reducible  := {r.reducibility}  hyps := {r.numHyp}  members := {r.members.toList}\n" ++
+    s!"  shape      := {if r.shape.isEmpty then "(なし)" else r.shape}  rel := {r.shapeRel}  rel2 := {r.shapeRel2}  on := {r.shapeType}\n" ++
+    s!"  origin     := {if r.originRel.isEmpty then "(手書き)" else s!"{r.origin}  kind := {r.originKind}  rel := {r.originRel}"}\n" ++
     s!"  subject    := {r.subject}  (結論の頭部 {r.head})\n" ++
     String.join (r.binders.toList.map fun b => s!"  引数 [{b.kind}] {b.name} : {b.type}\n") ++
     s!"  結論       := {r.conclusion}\n" ++
@@ -485,7 +668,8 @@ def buildReport (env : Environment) (ci : ConstantInfo)
     match env.getModuleFor? d with
     | some m => acc.insert m
     | none   => acc
-  let line ← try declLine name catch _ => pure 0
+  let orig ← try originOf name catch _ => pure {}
+  let line ← try declLine name orig.origin catch _ => pure 0
   let isInst ← try Lean.Meta.isInstance name catch _ => pure false
   -- `ReducibilityStatus` の構成子は版により増える(〜v4.28: 3 つ / v4.29 で
   -- `implicitReducible` 追加(#12247)/ v4.33 で `instanceReducible` に分割
@@ -533,6 +717,7 @@ def buildReport (env : Environment) (ci : ConstantInfo)
     shape       := cls.shape
     shapeRel    := cls.shapeRel
     shapeRel2   := cls.shapeRel2
+    shapeType   := cls.shapeType
     reducibility := red
     line
     numUniverse := ci.levelParams.length
@@ -541,6 +726,9 @@ def buildReport (env : Environment) (ci : ConstantInfo)
     valueSize   := valSize
     members     := membersOf env ci
     valueString := valStr
+    origin      := orig.origin
+    originKind  := orig.kind
+    originRel   := orig.rel
   }
 
 /-- 1 つの `ConstantInfo` から `DeclReport` を構築する（バッチ用、キャッシュ共有）。 -/
@@ -573,8 +761,12 @@ def analyzeDeclSingle (ci : ConstantInfo) (valueChars : Nat := 0) : MetaM DeclRe
 機械検査に他ならない。不動点の全体は完備束をなし、min(↓d) はその中の
 主不動点 ↓{d} の極小元である。
 
-深さ無制限の場合は ImportGraph の `Name.transitivelyUsedConstants` が
-閉集合そのものを返すので、そちらを使う（フロンティアは必ず空になる）。 -/
+深さの既定値は事実上無制限（1000000）で、そのときフロンティアは必ず空になる。
+閉包は深さの有無に関わらず同じ BFS（`downwardClosure`）で辿る。
+
+注意: ここでの min(↓d) は「型にも値にも定数を一つも含まない宣言」であり、
+`Nat` や `Bool` のような **語彙の原子** である。`propext` は `Iff` と `Eq` を
+参照するので極小元ではない。公理は `collectAxioms` で別に報告する。 -/
 
 /-- 深さ付きの下方閉集合を BFS で構築する。 -/
 partial def downwardClosure (env : Environment) (root : Name) (maxDepth : Nat)
@@ -619,11 +811,14 @@ structure MinimalAssumptions where
   trueMinimal     : Array (Name × String)
   frontier        : Array (Name × String)
   axiomsInClosure : Array Name
-  /-- 推移的に必要になるモジュール（ImportGraph の `transitivelyRequiredModules`）。 -/
+  /-- 推移的に必要になるモジュール。閉包 ↓root の各宣言の定義モジュールの集合から、
+      root 自身のモジュールを除いたもの。 -/
   requiredModules : Array Name
   /-- 冗長を除いた極小の import 集合。推移的に必要なもの全部を並べても
       「どれが本当に要るのか」は分からない。`Environment.findRedundantImports`
-      で他から含意されるものを落とした残りが、モジュール版の min(↓d) にあたる。 -/
+      で他から含意されるものを落とした残りが、モジュール版の min(↓d) にあたる。
+      root 自身のモジュール M を候補から外すのは、M が残ると M の import 閉包が
+      他の候補を全て含意して、結果が M 一つに潰れるため（読解で確認）。 -/
   irredundantModules : Array Name
 
 def analyzeMinimalAssumptions (env : Environment) (root : Name) (maxDepth : Nat := 1000000)
@@ -633,8 +828,15 @@ def analyzeMinimalAssumptions (env : Environment) (root : Name) (maxDepth : Nat 
   let withKind (xs : Array Name) : Array (Name × String) :=
     xs.map fun n => (n, ((env.find? n).map kindString).getD "unknown")
   let ax ← Lean.collectAxioms root
-  -- モジュールレベルの依存は ImportGraph に任せる（CoreM なので MetaM から呼べる）
-  let reqMods ← root.transitivelyRequiredModules env
+  /- 必要モジュールは、いま作った閉包の各宣言の定義モジュールから集める。
+     定理の証明項にしか現れない依存も閉包に入っているので、証明でしか使わない
+     モジュールも落ちない。root 自身のモジュールは「root を述べるのに要る import」
+     ではないので外す。 -/
+  let selfMod := moduleOf env root
+  let reqMods := closure.fold (init := ({} : NameSet)) fun acc n _ =>
+    match env.getModuleFor? n with
+    | some m => if m == selfMod then acc else acc.insert m
+    | none   => acc
   -- 冗長な import を落として極小の集合にする。ImportGraph の `#min_imports` と同じ考え方。
   let reqArr := nameArray reqMods
   let redundant := env.findRedundantImports reqArr

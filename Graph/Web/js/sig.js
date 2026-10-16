@@ -59,22 +59,40 @@
     return t;
   }
 
-  const REL = [" ↔ ", " = ", " ≠ ", " ≤ ", " < ", " ≥ ", " > ", " ∈ ", " ⊆ ", " ∧ ", " ∨ "];
+  /* 中置の結合子を **結合の弱い順**（= 主結合子になる順）に並べる。Lean の優先度は
+       `↔` 20 ＜ `∨` 30 ＜ `∧` 35 ＜ `=` `≠` `≤` `<` `∈` `⊆` … 50
+     なので、`a = a' ∧ b = b'` の主結合子は `∧` であり、`=` ではない。括弧の外で最初に
+     見つかった記号で切ると「左辺 a / 右辺 a' ∧ b = b'」という主張の誤読になる
+     （フィクスチャの `pair_inj`、cslib の `injEq` で実測）。同じ群の中では左から最初の
+     出現で切る（`∧` `∨` は右結合なので、最初の出現が最外の結合子）。 */
+  const REL_GROUPS = [
+    [" ↔ "],
+    [" ∨ "],
+    [" ∧ "],
+    [" = ", " ≠ ", " ≤ ", " < ", " ≥ ", " > ", " ∈ ", " ∉ ", " ⊆ ", " ⊂ ", " ∣ "],
+  ];
+  const BINDER_HEAD = /^(∃|∀|∃!|fun |λ )/;
 
   /**
    * 結論を 関係 / 文脈 / 左辺 / 右辺 に割る。
-   * 中置記法で書かれていればそこで、前置適用なら末尾二引数で切る。
+   * 中置記法で書かれていれば主結合子（最も弱い結合子）で、前置適用なら末尾二引数で切る。
+   * 先頭が束縛（∃ x, …）や否定（¬a = b は ¬(a = b)）なら、中置で割ると束縛の内側を
+   * 切ることになるので割らない（whole のまま見せる）。
    * 二引数に満たなければ左辺・右辺は null（割らずにそのまま見せる）。
    */
   function decompose(conclusion) {
     const c = strip(String(conclusion || "").replace(/\s+/g, " "));
     if (!c) return { rel: null, ctx: [], lhs: null, rhs: null, whole: "" };
-    const hit = findTop(c, REL, 0);
-    if (hit) {
+    if (BINDER_HEAD.test(c)) return { rel: c.match(BINDER_HEAD)[0].trim(), ctx: [], lhs: null, rhs: null, whole: c };
+    if (c.startsWith("¬")) return { rel: "¬", ctx: [], lhs: null, rhs: null, whole: c };
+    for (const group of REL_GROUPS) {
+      const hit = findTop(c, group, 0);
+      if (!hit) continue;
+      // 両辺を包むだけの括弧は外す（`(x = y) = (p ∧ q)` の左辺は `x = y`）
       return {
         rel: hit.tok.trim(), ctx: [],
-        lhs: c.slice(0, hit.at).trim(),
-        rhs: c.slice(hit.at + hit.tok.length).trim(),
+        lhs: strip(c.slice(0, hit.at)),
+        rhs: strip(c.slice(hit.at + hit.tok.length)),
         whole: c,
       };
     }
@@ -112,8 +130,37 @@
     idem:     { ja: "冪等", note: "f a a = a の形" },
     absorb:   { ja: "吸収", note: "f a (g a b) = a の形。二つの半束を束に結ぶ" },
     distrib:  { ja: "分配", note: "f a (g b c) = g (f a b) (f a c) の形" },
-    mono:     { ja: "単調", note: "関係の仮定から、同じ頭部の像について同じ関係" },
+    mono:     { ja: "単調", note: "関係 R の仮定から、同じ頭部 f の像について R。担い手は f、関係は相方" },
   };
 
-  LDR.sig = { decompose, abbrev, shortName, splitTopSpaces, findTop, strip, SHAPE };
+  /** 由来の種類（Lean 側 `originOf` の kind）につける日本語。一覧・グラフ・検査で共通。 */
+  const ORIGIN_KIND = {
+    constructor:     { ja: "構成子",   note: "帰納型の構成子（カーネルの宣言）" },
+    projection:      { ja: "射影",     note: "構造体のフィールドの射影関数" },
+    rec:             { ja: "再帰子",   note: "カーネルの再帰子（普遍性）" },
+    recOn:           { ja: "再帰子",   note: "再帰子の言い換え（主引数を先に）" },
+    brecOn:          { ja: "再帰子",   note: "累積再帰（構造的再帰の実装用）" },
+    auxRec:          { ja: "再帰子",   note: "補助再帰子（構成子ごとの除去など）" },
+    casesOn:         { ja: "場合分け", note: "帰納仮定なしの場合分け" },
+    ctorIdx:         { ja: "番号",     note: "構成子の番号を返す関数" },
+    noConfusion:     { ja: "区別",     note: "構成子が互いに素であること・単射であること" },
+    noConfusionType: { ja: "区別",     note: "noConfusion の結論の型" },
+    inj:             { ja: "単射性",   note: "構成子の単射性（含意の形）" },
+    injEq:           { ja: "単射性",   note: "構成子の単射性（等式の形、simp 用）" },
+    hinj:            { ja: "単射性",   note: "添字つきの単射性" },
+    sizeOf_spec:     { ja: "大きさ",   note: "sizeOf の計算規則" },
+    sizeOf_inst:     { ja: "大きさ",   note: "SizeOf のインスタンス" },
+    sizeOf:          { ja: "大きさ",   note: "sizeOf の実装関数" },
+    eqn:             { ja: "等式",     note: "定義の等式補題（eq_<i> / eq_def）" },
+    matcher:         { ja: "断片",     note: "match 式の補助関数" },
+    proof:           { ja: "断片",     note: "証明の切り出し（_proof_<i>）" },
+    internal:        { ja: "断片",     note: "内部補助" },
+  };
+  const ORIGIN_REL = {
+    member: { ja: "成員", note: "定義の一部として利用者が書いたもの" },
+    facet:  { ja: "派生", note: "由来から機械的に導かれる別の宣言" },
+    part:   { ja: "断片", note: "由来の証明・本体の一部" },
+  };
+
+  LDR.sig = { decompose, abbrev, shortName, splitTopSpaces, findTop, strip, SHAPE, ORIGIN_KIND, ORIGIN_REL };
 })(window.LDR = window.LDR || {});
