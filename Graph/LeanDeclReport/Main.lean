@@ -327,6 +327,13 @@ unsafe def mainImpl (args : List String) : IO UInt32 := do
           queue := queue ++ nameArray (directDepsOfCore env n).all
         else
           external := external.insert n
+          /- 外部の断片（`X._proof_i` / `X.match_i`。由来の証明・本体の一部）を対象が直接参照する
+             ことがある（cslib の定理が Mathlib のインスタンスの `_proof_i` を実測）。ビューアは断片を
+             参照する側へ埋め戻すので、断片の依存先は参照する側にとって一段先である。一段しか出さないと
+             それらが範囲外のスタブに落ち、基盤に「種別不明」が並ぶ（実測 8 件）。断片の依存先も出す。 -/
+          let (o, _) ← (originOf n).toIO coreCtx coreState
+          if o.rel == "part" then
+            queue := queue ++ nameArray (directDepsOfCore env n).all
       /- 外部の派生・断片（`PMF.pure._proof_1` / `Exists.rec` 等）は、その由来（`PMF.pure` / `Exists`）も
          一段だけ出す。由来がレポートに無いと、ビューアは由来に畳めず `_proof_1` が節点のまま図に残り、
          極小元にも並ぶ（cslib で実測）。由来は手書きの宣言（π はレトラクション）なので、由来の由来は要らない。 -/
@@ -338,6 +345,17 @@ unsafe def mainImpl (args : List String) : IO UInt32 := do
           if env.contains p && !inSet.contains p && !internal.contains p && !external.contains p then
             originsOfExternal := originsOfExternal.insert p
       external := external.union originsOfExternal
+      /- 公理は依存順序の正真正銘の極小元（これ以上下が無い）であって、「依存が分からない点」ではない。
+         対象から見た公理は `axioms` 欄に名前で現れるだけで、二段先（`Classical.propDecidable` →
+         `Classical.choice`）に在るため外部一段には入らず、ビューアでは範囲外のスタブに落ちていた
+         （cslib で実測。極小元の節に公理が一つも並ばない）。`axioms` に現れる名前を外部として出し、
+         kind = axiom の宣言にする。 -/
+      let mut axiomsSeen : NameSet := {}
+      for r in reports do
+        for a in r.axioms do
+          if env.contains a && !inSet.contains a && !internal.contains a then
+            axiomsSeen := axiomsSeen.insert a
+      external := external.union axiomsSeen
       let (intReports, intShapeless, intSkipped) ←
         collectAllReports env (nameArray internal) parsed.valueChars coreCtx coreState
       let (extReports, extShapeless, extSkipped) ←

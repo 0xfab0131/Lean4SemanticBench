@@ -68,6 +68,11 @@
 
     pathFrom: null,         // ここから中心までの経路を強調する
     derivOpen: new Set(),   // 導出図で開いている前提
+    /* キャンバス下の区画に出すもの。三つは同じグラフから計算できる別の数学的対象で、答える問いが違う。
+         foundation  基盤 ∂_T x: 対象の閉包から外へ出る先（この結果は対象の外の何の上に立つか）
+         atoms       原子 min(↓x): 依存先を持たない宣言と公理（最終的に何に還元されるか）
+         frontier    境界 ∂x: 読み込んだ範囲の切れ目（どこから先を辿っていないか） */
+    minimalMode: "foundation",
 
     hist: { nodes: {}, order: [], curId: null, seq: 0 },
     pins: [],
@@ -130,6 +135,9 @@
        依存が続いていて葉に見えるだけなのに、元の索引で測ると極小元に並ぶ（cslib で実測）。 */
     if (!cache.inlined) cache.inlined = {};
     if (!cache.inlined[em]) cache.inlined[em] = G.buildIndices(G.effectiveNodes(state.nodes, () => true).nodes, em);
+    /* 主張の閉包（型依存だけで辿る）用。基盤 ∂_T x を「主張が立脚する」「証明が持ち込んだ」に二分する。
+       辺の種に依らず常に型依存だけなので、鍵は固定 */
+    if (!cache.inlined.typeOnly) cache.inlined.typeOnly = G.buildIndices(G.effectiveNodes(state.nodes, () => true).nodes, "type");
     if (!cache.defaultCenter[em]) {
       // 既定中心は手書きの宣言から選ぶ。骨組み・派生・断片は候補にしない
       const skip = LDR.roles ? (n) => {
@@ -146,7 +154,7 @@
       }
       cache.facetOrigins = s;
     }
-    return { decl: cache.decl[em], mod: cache.mod[em], inlined: cache.inlined[em],
+    return { decl: cache.decl[em], mod: cache.mod[em], inlined: cache.inlined[em], inlinedType: cache.inlined.typeOnly,
              defaultCenter: cache.defaultCenter[em], facetOrigins: cache.facetOrigins };
   }
 
@@ -245,11 +253,15 @@
       const cs = G.closureStats(idx.dep, names);
       const depth = G.chainDepths(idx.dep, names);
       /* 「無条件に得られたものだけから、無条件に得られている」か。
-         自分に仮定もインスタンス要求も無く、かつ依存先すべてが同じ性質を持つ。
-         利用者が語っていた def の使い分けのうち、三番目にあたる区別。 */
+         自分に仮定（Prop 値の束縛）が無く、かつ依存先すべてが同じ性質を持つ。
+         利用者が語っていた def の使い分けのうち、三番目にあたる区別。
+         インスタンス束縛 `[Semiring R]` は数学的には仮定ではなく引数（構造を固定する指標）なので
+         数えない。帰納型の依存に構成子の型を加えてから、`Fintype.mk` が `SetLike.instMembership`
+         （インスタンス束縛を持つ射影）を参照するだけで Mathlib 上の宣言が全て「条件付き」に落ち、
+         この計量が空虚になった（cslib で 9/118 → 0/118 を実測）。 */
       const uncond = (n) => {
         const nd = state.nodes[n];
-        return !!nd && (nd.numHyp || 0) === 0 && (nd.numInst || 0) === 0;
+        return !!nd && (nd.numHyp || 0) === 0;
       };
       const hered = G.hereditary(idx.dep, names, uncond);
       cache.metrics[em] = {
@@ -450,7 +462,8 @@
     const view = ix.view;
     const idx = state.granularity === "module" ? ix.mod : view.idx;
     derived.declIdx = ix.decl; derived.modIdx = ix.mod; derived.idx = idx; derived.viewIdx = view.idx;
-    derived.inlinedIdx = ix.inlined;    // 断片を由来に埋め戻した索引（極小元・レポートが使う）
+    derived.inlinedIdx = ix.inlined;    // 断片を由来に埋め戻した索引（基盤・原子・境界・レポートが使う）
+    derived.inlinedTypeIdx = ix.inlinedType;   // 同じ索引を型依存だけで（主張の閉包）
     derived.via = view.via; derived.facetCount = view.facetCount; derived.partCount = view.partCount;
     derived.forcedOpen = ix.forced;
 
@@ -466,6 +479,7 @@
     derived.trueMinimal = []; derived.minimalSet = new Set(); derived.frontier = [];
     derived.fullDownSize = 0; derived.highlight = null; derived.traceUnreachable = null;
     derived.pathSet = null; derived.edgeKindOverlay = null; derived.facetReach = {};
+    derived.foundation = null; derived.frontierClean = null;
     if (!c || !idx.dep) return;
 
     /* min(↓d) は宣言 d の性質であって、いま何を展開しているかとは無関係。
@@ -480,6 +494,14 @@
     derived.minimalSet = new Set(mf.trueMinimal);   // 描画は毎フレーム引くので集合で持つ
     derived.frontier = mf.frontier;
     derived.fullDownSize = Object.keys(fullDep).length;
+    /* 境界の清掃（既知の構造体の成員と注釈を外す）と、基盤 ∂_T x（graph.foundation）。
+       宣言粒度でだけ意味を持つ。基盤の対象 T は external でない節点（対象＋内部補助）。 */
+    derived.frontierClean = G.cleanFrontier(mf.frontier, nodes);
+    derived.foundation = null;
+    if (state.granularity === "decl") {
+      const inT = (n) => !!nodes[n] && !nodes[n].external;
+      derived.foundation = G.foundation(c, ix.inlined.dep, ix.inlinedType.dep, inT);
+    }
 
     /* 由来ごとに「この中心から見える派生の数」。派生 g は中心の依存閉包 ↓c か参照閉包 ↑c に
        入っているときだけ、由来を開けば節点として現れ得る。グラフの札 `+k` はこの k を出す
@@ -676,6 +698,7 @@
       selected: state.selected,
       kindFilter: [...state.kindFilter],
       openClusters: [...state.openClusters],
+      minimalMode: state.minimalMode,
       view: { ...state.view },
     };
   }
@@ -699,6 +722,7 @@
     state.traceTarget = s.traceTarget || null;
     state.selected = s.selected || null;
     state.openClusters = new Set(s.openClusters || []);
+    if (s.minimalMode === "foundation" || s.minimalMode === "atoms" || s.minimalMode === "frontier") state.minimalMode = s.minimalMode;
     // 旧いピン（全開を旗で持っていた頃）は、集合を全入れにして読む
     if (s.openAll) state.openClusters = new Set(baseIndices().facetOrigins);
     state.view = s.view ? { ...s.view } : { tx: 0, ty: 0, k: null };
@@ -832,6 +856,9 @@
       const s = new Set(state.derivOpen);
       s.has(n) ? s.delete(n) : s.add(n);
       state.derivOpen = s; emit();
+    },
+    setMinimalMode(m) {
+      if (m === "foundation" || m === "atoms" || m === "frontier") { state.minimalMode = m; emit(); }
     },
     hover(n) { if (state.hovered !== n) { state.hovered = n; emit(); } },
     toggleExpand(n) {

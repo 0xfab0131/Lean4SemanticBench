@@ -26,7 +26,8 @@
     { id: "value",   ja: "値依存（証明にだけ現れる宣言）" },
     { id: "axioms",  ja: "公理の由来（主張か証明か・入口・最初に現れる宣言）" },
     { id: "figure",  ja: "導出図（前提 → 規則 → 結論）" },
-    { id: "minimal", ja: "極小元 min(↓x) と境界" },
+    { id: "foundation", ja: "基盤（対象の閉包から外へ出る先 ∂_T x）と原子 min(↓x)" },
+    { id: "frontier",   ja: "境界（読み込んだ範囲の切れ目 ∂x）" },
     { id: "refs",    ja: "参照（主張で／証明で）" },
     { id: "path",    ja: "経路（中心との順序区間）" },
     { id: "metrics", ja: "計量（総仮定量・導出鎖の深さ）" },
@@ -38,7 +39,6 @@
   /* 書き方の選択。情報を落とす側は利用者が選んだときだけ（既定は落とさない）。 */
   const STYLE = [
     { id: "fullNames",     ja: "名前は完全名で（外すと末尾二成分）", def: true },
-    { id: "frontierNames", ja: "境界の宣言を全て列挙する", def: true },
     { id: "edgeList",      ja: "区間の辺を一本ずつ列挙する（外すと節点ごとの隣接）", def: true },
   ];
 
@@ -429,33 +429,69 @@
     return out;
   }
 
-  /* 極小元 min(↓x)。範囲外のスタブは「境界」（依存が分からないだけ）であって極小元ではない。
-     境界はパッケージごとの件数だけ（名前は多すぎて読めない。40 件以下なら列挙）。 */
-  function minimalSection(name, st, dv, nm, frontierNames, fx) {
+  /* 基盤・原子・境界は同じ ↓x（断片を由来に埋め戻した索引）から取る。計量の |↓x| も同じ値を出す。 */
+  function downSet(name, dv) {
     const idx = dv.inlinedIdx || dv.declIdx;
     const down = G.reachable(name, idx.dep, 64);
+    return { idx, down };
+  }
+
+  /* 基盤 ∂_T x（graph.foundation）。対象 T（external でない節点）の閉包から外へ出る先を、
+     型・構造体／定義／補題／配管 に分け、多重度（使う対象側の宣言）と、主張が立脚するか（型依存だけの
+     閉包から出る）証明が持ち込んだかを添える。原子 min(↓x) は Mathlib の上ではどの定理でも同じ集合
+     なので一行で済ませる（以前はこれが節の全部で、型クラスが原子として並んでいた）。 */
+  function foundationSection(name, st, dv, nm) {
+    const { idx, down } = downSet(name, dv);
     const mf = G.minimalAndFrontier(Object.keys(down), idx.dep, (n) => !!(st.nodes[n] && st.nodes[n].stub));
-    const out = ["", `## 極小元 min(↓${nm(name)})（${mf.trueMinimal.length} 件 / 下方閉集合 ${Object.keys(down).length} 件。断片は由来に埋め戻して数える）`];
-    const group = (list) => {
-      const byPkg = new Map();
-      for (const m of list) { const p = pkgOf(st.nodes[m]) || "（範囲外）"; (byPkg.get(p) || byPkg.set(p, []).get(p)).push(m); }
-      return [...byPkg.entries()].sort((a, b) => b[1].length - a[1].length);
-    };
-    for (const [p, list] of group(mf.trueMinimal)) {
-      out.push("", `### ${p}（${list.length}）`, list.map((m) => `${code(nm(m))}（${kindJa((st.nodes[m] || {}).kind)}）`).join(", "));
+    const inT = (n) => !!st.nodes[n] && !st.nodes[n].external;
+    const fd = G.foundation(name, idx.dep, (dv.inlinedTypeIdx || idx).dep, inT);
+    const out = ["", `## 基盤（対象の閉包から外へ出る先 ∂_T x。${fd.list.length} 件）`, "",
+      `対象 T（レポートの対象＋内部補助）の中で ${code(nm(name))} から辿れる宣言は ${fd.closureSize} 件（主張の閉包は ${fd.statementClosureSize} 件）。`,
+      "その閉包から対象の外へ出る辺の先 z ∉ T を全て挙げる。×k は z を直接使う対象側の宣言の数。[主張] は主張（型依存だけの閉包）が立脚するもの、[証明] は証明が持ち込んだもの（主張には現れない）。"];
+    // 原子は一行。公理を先に
+    const atoms = mf.trueMinimal.slice().sort((a, b) => (((st.nodes[b] || {}).kind === "axiom") - ((st.nodes[a] || {}).kind === "axiom")) || (a < b ? -1 : 1));
+    out.push("", `原子 min(↓x)（依存先を持たない宣言と公理。${atoms.length} 件 / 下方閉集合 ${Object.keys(down).length} 件）: `
+      + (atoms.length ? atoms.map((m) => `${code(nm(m))}${(st.nodes[m] || {}).kind === "axiom" ? "（公理）" : ""}`).join(", ") : "なし"));
+    const groups = new Map();
+    for (const e of fd.list) {
+      const g = R.foundationGroup(e.name, st.nodes[e.name]);
+      (groups.get(g) || groups.set(g, []).get(g)).push(e);
     }
-    /* 境界 ∂x = ↓x ∖ K（K = レポートの知識領域: 対象＋内部補助＋外部一段）。
-       集合の列挙では「何が何を利用しているか」が消えるので、二部グラフ
-         E_x = { (y, z) : y ∈ ↓x ∩ K, z ∈ ∂x, y → z }
-       として、既知の宣言 y（中心からの段数つき、近い順）ごとに、その直接依存のうち範囲外のもの z を
-       名前空間で束ねて全て示す。z の多くは既知の構造体のフィールド（Mathlib の class の公理群）への
-       参照なので、既知の構造体の成員ならそう記す。同じ z が複数の y に現れるのは事実（辺が別）。 */
-    if (mf.frontier.length) {
-      const fr = new Set(mf.frontier);
-      out.push("", `### 境界（${mf.frontier.length} 件）`, "",
-        "レポートの範囲外へ依存が続く点（外部の宣言は一段しか辿っていない）。極小元ではなく、本当の極小元はこの先を辿らなければ確定しない。",
-        "「既知の宣言(中心からの段数) → その直接依存のうち範囲外のもの」の形で、近い順に全て示す。右側は名前空間で束ね `Ns.{a, b}`、",
-        "既知の構造体のフィールドなら「成員」と記す。", "");
+    for (const g of R.GROUP_ORDER) {
+      if (!groups.has(g)) continue;
+      const es = groups.get(g).slice().sort((a, b) => (b.users.length - a.users.length) || (a.name < b.name ? -1 : 1));
+      out.push("", `### ${R.GROUP[g].ja}（${es.length}）`);
+      for (const e of es) {
+        const nd = st.nodes[e.name] || {};
+        const users = e.users.map((y) => nm(y));
+        out.push(`- ${code(nm(e.name))} ×${e.users.length} [${e.inStatement ? "主張" : "証明"}]${pkgOf(nd) ? ` ${pkgOf(nd)}` : ""}${concl(nd) ? ` — ${cell(sig.abbrev(concl(nd)))}` : ""}`
+          + `　← ${users.slice(0, 6).map(code).join(", ")}${users.length > 6 ? ` ほか ${users.length - 6} 件` : ""}`);
+      }
+    }
+    if (!fd.list.length) out.push("", "対象の閉包は外へ出ない（対象の中で閉じている）。");
+    return out;
+  }
+
+  /* 境界 ∂x = ↓x ∖ K（K = レポートの知識領域: 対象＋内部補助＋外部一段）。
+     集合の列挙では「何が何を利用しているか」が消えるので、二部グラフ
+       E_x = { (y, z) : y ∈ ↓x ∩ K, z ∈ ∂x, y → z }
+     として、既知の宣言 y（中心からの段数つき、近い順）ごとに、その直接依存のうち範囲外のもの z を
+     名前空間で束ねて全て示す。既知の構造体の成員（射影・構成子）と注釈は境界から外して別に数える
+     （graph.cleanFrontier。射影への依存は構造体への依存と同じ情報で、「依存が分からない点」ではない）。 */
+  function frontierSection(name, st, dv, nm, fx) {
+    const { idx, down } = downSet(name, dv);
+    const mf = G.minimalAndFrontier(Object.keys(down), idx.dep, (n) => !!(st.nodes[n] && st.nodes[n].stub));
+    const fc = G.cleanFrontier(mf.frontier, st.nodes);
+    const out = ["", `## 境界（読み込んだ範囲の切れ目。${fc.rest.length} 件）`, "",
+      "レポートの範囲外へ依存が続く点（外部の宣言は一段しか辿っていない）。極小元ではなく、本当の極小元はこの先を辿らなければ確定しない。",
+      "「既知の宣言(中心からの段数) → その直接依存のうち範囲外のもの」の形で、近い順に全て示す。右側は名前空間で束ね `Ns.{a, b}`。"];
+    const memberCount = [...fc.members.values()].reduce((a, b) => a + b.length, 0);
+    if (memberCount) out.push(`既知の構造体の成員（射影・構成子）${memberCount} 件は境界に数えず構造体に畳む: `
+      + [...fc.members.entries()].sort((a, b) => b[1].length - a[1].length).map(([o, ls]) => `${code(nm(o))} {${ls.join(", ")}}`).join("; "));
+    if (fc.annotations.length) out.push(`elaborator の注釈 ${fc.annotations.length} 件（${[...new Set(fc.annotations.map((a) => a.replace(/^.*\./, "")))].join(", ")}）は依存に数えない。`);
+    if (fc.rest.length) {
+      const fr = new Set(fc.rest);
+      out.push("");
       const refs = [];
       for (const y of Object.keys(down)) {
         if (fr.has(y)) continue;
@@ -470,26 +506,18 @@
           const ns = i < 0 ? "" : s.slice(0, i), leaf = i < 0 ? s : s.slice(i + 1);
           (g.get(ns) || g.set(ns, []).get(ns)).push(leaf);
         }
-        return [...g.entries()].sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1)).map(([ns, ls]) => {
-          const owner = ns && st.nodes[ns];
-          const members = owner && Array.isArray(owner.members) ? owner.members : [];
-          const isMember = ns && owner && owner.kind === "inductive" && ls.every((l) => members.includes(l));
-          if (!ns) return ls.map(code).join(", ");
-          return isMember ? `${code(ns)} の成員 {${ls.join(", ")}}` : `${code(ns)}.{${ls.join(", ")}}`;
-        }).join("; ");
+        return [...g.entries()].sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1))
+          .map(([ns, ls]) => (ns ? `${code(ns)}.{${ls.join(", ")}}` : ls.map(code).join(", "))).join("; ");
       };
       /* 型クラスの配管（構造体の射影 `X.toY`・インスタンス・構成子 `mk`）は数が多く、補題・定義の行を
-         埋める。情報は落とさず、二つの小節に分けて同じ形式で全て出す。 */
-      const plumbing = (y) => {
-        const n = st.nodes[y] || {};
-        return !!n.isInstance || n.kind === "constructor" || n.originRel === "member" || /\.(to[A-Z][^.]*|inst[A-Z][^.]*|mk)$/.test(u(y)) || /^inst[A-Z]/.test(u(y));
-      };
+         埋める。情報は落とさず、二つの小節に分けて同じ形式で全て出す。判定は roles.isPlumbing（基盤と共通）。 */
+      const plumbing = (y) => R.isPlumbing(y, st.nodes[y]);
       const main = refs.filter(([y]) => !plumbing(y)), pipes = refs.filter(([y]) => plumbing(y));
       out.push(`#### 補題・定義から（${main.length} 件）`);
       for (const [y, zs] of main) out.push(`- ${code(nm(y))}(${down[y]}) → ${bundle(zs)}`);
       out.push("", `#### 型クラスの配管から（射影・インスタンス・構成子。${pipes.length} 件）`);
       for (const [y, zs] of pipes) out.push(`- ${code(nm(y))}(${down[y]}) → ${bundle(zs)}`);
-      out.push("", `（既知の宣言 ${refs.length} 件が、範囲外の ${mf.frontier.length} 件を参照している）`);
+      out.push("", `（既知の宣言 ${refs.length} 件が、範囲外の ${fc.rest.length} 件を参照している）`);
       /* 図: 二部関係 E_x のうち、読み手にとって意味のある部分。
            左 = 対象（レポートの範囲）の宣言。範囲外の宣言（Mathlib の補題）が範囲外を参照する分は
                「Mathlib が Mathlib を使う」事実で、この定理の読み手の関心ではない（文章版には全て
@@ -645,8 +673,12 @@
   function metricsSection(name, st, dv, met) {
     const idx = dv.declIdx;
     const nd = st.nodes[name] || {};
+    /* |↓x| は基盤・境界と同じ索引（断片を由来に埋め戻したもの）で数える。以前は元の索引で数えた値を
+       ここに、埋め戻した値を極小元の節に出し、同じ記号に二つの値が並んでいた（実測 1446 と 1301）。 */
+    const { down } = downSet(name, dv);
+    const raw = met.closure[name];
     return ["", "## 計量", "",
-      `- 総仮定量 |↓x|: ${met.closure[name] ?? "—"}${met.exact ? "" : "（深さで代用）"}`,
+      `- 総仮定量 |↓x|: ${Object.keys(down).length}（断片 _proof_<i> を由来に埋め戻して数える${met.exact && raw !== undefined && raw !== Object.keys(down).length ? `。断片を別に数えると ${raw}` : ""}）`,
       `- 導出鎖の深さ: ${met.depth[name] ?? "—"}`,
       `- 直接依存: 型 ${(nd.typeDeps || []).length} / 値 ${(nd.valueDeps || []).length}   参照: 主張 ${(idx.refType[name] || []).length} / 証明 ${(idx.refValue[name] || []).length}`,
       `- 節点数: 型 ${nd.typeSize || 0} / 証明 ${nd.valueSize || 0}`,
@@ -674,7 +706,7 @@
     "- 事実は依存グラフの元の形で測っている（表示用の派生の畳み込み・骨組みの縮約は行わない）。",
     "- 型依存 = 主張（型）に現れる宣言（何を述べているかを決める）。値依存 = 証明（値）にだけ現れる宣言（どう示したかを決める）。",
     "- 公理は Lean の collectAxioms による現状の証明項の正確な集合。証明の改良で減り得る。「主張に入る」= 型依存の閉包に公理を持つ宣言がある。",
-    "- 極小元 min(↓x) は依存先を持たない宣言（語彙の原子）。境界はレポートの範囲外で依存が続く宣言で、極小元ではない。",
+    "- 基盤 ∂_T x = 対象（レポートの対象＋内部補助）の閉包から外へ出る辺の先。原子 min(↓x) は依存先を持たない宣言と公理。境界 ∂x はレポートの範囲外で依存が続く宣言で、極小元ではない（既知の構造体の成員と注釈は数えない）。",
     "- 導出図は論理の骨組み（And.intro / Eq.mpr …）と断片（_proof_<i>）を通り抜けて前提を拾う。",
     "- 順序区間 [s, c] = ↑s ∩ ↓c。ℓ は上端からの最長導出鎖の長さ。",
     "- 付録の図は本文の各節と同じ事実を Mermaid の flowchart で描いたもの（記法は付録の頭）。描けない環境では本文を読む。",
@@ -693,17 +725,17 @@
     const sections = new Set((opts && opts.sections) || ALL);
     const depth = Math.max(1, Math.min(3, (opts && opts.depth) || 2));
     const o = opts || {};
-    const fullNames = o.fullNames !== false, frontierNames = o.frontierNames !== false, edgeList = o.edgeList !== false;
+    const fullNames = o.fullNames !== false, edgeList = o.edgeList !== false;
     const nm = fullNames ? u : sig.shortName;
     const fx = { on: sections.has("figures"), figs: [] };    // 図を積む入れ物（付録でまとめて出す）
     const center = dv.center;
     let subject, label;
     if (kind === "selected") { subject = st.selected && st.selected !== center ? st.selected : null; label = "選択"; }
-    else if (kind === "minimal") { subject = st.traceTarget; label = "極小元"; }
+    else if (kind === "minimal") { subject = st.traceTarget; label = "経路の対象"; }
     else { subject = center; label = "中心"; }
     if (!subject || !st.nodes[subject]) {
       return { ok: false, text: "", msg: kind === "minimal"
-        ? "極小元が選ばれていません。極小元のチップ（または公理のチップ）を押して経路を表示してから"
+        ? "経路の対象が選ばれていません。基盤・原子・境界のチップ（または公理のチップ）を押して経路を表示してから"
         : kind === "selected" ? "中心と異なる宣言が選ばれていません。グラフや一覧で宣言を押してから" : "中心がありません" };
     }
     const nd = st.nodes[subject];
@@ -717,7 +749,8 @@
     if (sections.has("value")) out.push(...depTable(nd.valueDeps || [], st, met, "値依存", `${code(nm(subject))} の証明（値）にだけ現れる宣言。定理ならカーネル検査済み。`, nm));
     if (sections.has("axioms")) out.push(...axiomsSection(subject, st, dv, met, nm, fx));
     if (sections.has("figure")) out.push(...figureSection(subject, st, depth, met, nm, fx));
-    if (sections.has("minimal")) out.push(...minimalSection(subject, st, dv, nm, frontierNames, fx));
+    if (sections.has("foundation")) out.push(...foundationSection(subject, st, dv, nm));
+    if (sections.has("frontier")) out.push(...frontierSection(subject, st, dv, nm, fx));
     if (sections.has("refs")) out.push(...refsSection(subject, st, dv, met, nm));
     if (sections.has("metrics")) out.push(...metricsSection(subject, st, dv, met));
     if (sections.has("meta")) out.push(...metaSection());

@@ -621,6 +621,65 @@
     return { trueMinimal: trueMinimal.sort(), frontier: frontier.sort() };
   }
 
+  /* ---------- 基盤（対象から見た境界）∂_T x ----------
+     真の極小元 min(↓x) は core の原子（And / Eq / Nat …）で、Mathlib の上のどの定理でも同じ集合に
+     なり、その定理について何も語らない。読み手が知りたいのは「この結果は対象の外の何の上に
+     立つか」で、それは対象 T（対象＋内部補助。external でない節点）の閉包から外へ出る辺の先
+
+         ∂_T x = { z ∉ T : ∃ y ∈ ↓x ∩ T, y → z }
+
+     である。各 z に、それを使う対象側の宣言 y の集合（多重度）を添える。主張の閉包（型依存だけで
+     辿った ↓x ∩ T から型依存の辺で出る先）に入るものは「主張が立脚する」、残りは「証明が持ち込んだ」。
+     x ∉ T（主語が Mathlib の宣言）なら閉包は {x} で、∂ は x の直接依存になる。
+     返り値: [{ name, users: [y…], inStatement }]（name 順）。 */
+  function foundation(x, dep, depType, inT) {
+    const walk = (adj) => {
+      const seen = new Set([x]), q = [x], out = new Map();
+      for (let i = 0; i < q.length; i++) {
+        for (const d of adj[q[i]] || []) {
+          if (inT(d)) { if (!seen.has(d)) { seen.add(d); q.push(d); } }
+          else (out.get(d) || out.set(d, new Set()).get(d)).add(q[i]);
+        }
+      }
+      return { out, closure: seen };
+    };
+    const all = walk(dep), typ = walk(depType);
+    const list = [...all.out.entries()].map(([name, users]) => ({ name, users: [...users].sort(), inStatement: typ.out.has(name) }));
+    list.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    return { list, closureSize: all.closure.size, statementClosureSize: typ.closure.size };
+  }
+
+  /* ---------- 境界の清掃 ----------
+     境界 ∂x（範囲外へ依存が続く点）には、「依存が分からない点」ではないものが混ざる。
+       成員  既知の構造体の射影・構成子（`Field.toDiv`、`Monoid.mk`）。構造体 `Field` はレポートに在り
+             members も持つ。射影への依存は構造体への依存と同じ情報（忘却関手の存在そのもの）。
+       注釈  `outParam` / `autoParam` / `optParam` / `semiOutParam` と `X.f._autoParam`。elaborator の
+             注釈で数学的内容を持たない（新しい解析器は依存から落とすが、旧いレポートには残る）。
+     どちらも境界から外し、別に数える。本当の境界は残りだけ。 */
+  const ANNOTATION = new Set(["outParam", "optParam", "autoParam", "semiOutParam"]);
+  const isAnnotation = (n) => ANNOTATION.has(n) || /\._autoParam$/.test(String(n));
+  /* z が既知の帰納型の成員（射影・構成子）なら、その帰納型の名前。 */
+  function memberOwner(z, nodes) {
+    const nz = nodes[z];
+    if (nz && nz.originRel === "member" && nz.origin && nodes[nz.origin] && !nodes[nz.origin].stub) return nz.origin;
+    const i = String(z).lastIndexOf(".");
+    if (i < 0) return null;
+    const owner = z.slice(0, i), leaf = z.slice(i + 1);
+    const no = nodes[owner];
+    if (no && !no.stub && no.kind === "inductive" && Array.isArray(no.members) && no.members.includes(leaf)) return owner;
+    return null;
+  }
+  function cleanFrontier(frontier, nodes) {
+    const rest = [], annotations = [], members = new Map();
+    for (const z of frontier) {
+      if (isAnnotation(z)) { annotations.push(z); continue; }
+      const o = memberOwner(z, nodes);
+      if (o) { (members.get(o) || members.set(o, []).get(o)).push(z.slice(o.length + 1)); continue; }
+      rest.push(z);
+    }
+    return { rest, annotations, members };
+  }
+
   /* ---------- 順序区間 [t, d] = ↑t ∩ ↓d ----------
      d から t への経路上にあるノードちょうどの集合。
      「この定理はどこで選択公理を使うのか」に正確に答える。 */
@@ -820,5 +879,6 @@
     parseJsonl, legacyOrigin, effectiveNodes, buildIndices, buildModuleIndices, visibleClosure, reachable,
     longestPathLevels, layoutCone, shortestUniqueSuffixes, contractThrough, contractNode,
     minimalAndFrontier, orderInterval, chainDepths, closureStats, hereditary, pickDefaultCenter,
+    foundation, cleanFrontier, memberOwner, isAnnotation,
   };
 })(window.LDR = window.LDR || {});

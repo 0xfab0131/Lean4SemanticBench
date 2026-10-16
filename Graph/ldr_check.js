@@ -662,6 +662,46 @@ console.log("\n=== 結論の分割（主結合子）とパッケージ ===");
   console.log("  パッケージ別の宣言数:", Object.entries(pk).map(([k, v]) => `${P.labelOf(k)} ${v}`).join(" / "));
 }
 
+/* ---- 基盤 ∂_T x と境界の清掃 ----
+   基盤 = 対象 T（external でない節点）の閉包から外へ出る辺の先。各項は対象の外に在り、対象側の宣言から
+   少なくとも一本の辺で使われ、主張が立脚するもの（型依存だけの閉包から出る）は全体の部分集合。
+   境界の清掃は、注釈（outParam / autoParam …）と既知の構造体の成員を外した残り。原子（真の極小元）に
+   公理が入ること（公理は範囲外のスタブではなく kind = axiom の宣言として出ている）も確かめる。 */
+console.log("\n=== 基盤 ∂_T x と境界の清掃 ===");
+{
+  S.actions.navigate(S.derived.defaultCenter || S.derived.center);
+  const dv = S.derived, nodes = S.state.nodes;
+  const fd = dv.foundation;
+  ok(!!fd, "基盤が計算されている（宣言粒度）");
+  if (fd) {
+    const inT = (n) => nodes[n] && !nodes[n].external;
+    console.log(`  基盤 ${fd.list.length} 件 / 対象側の閉包 ${fd.closureSize} 件（主張の閉包 ${fd.statementClosureSize} 件）`);
+    ok(fd.list.every((e) => !inT(e.name)), "基盤の各項は対象の外にある");
+    ok(fd.list.every((e) => e.users.length >= 1 && e.users.every(inT)), "基盤の各項は対象側の宣言から使われている（多重度 ≥ 1）");
+    ok(fd.statementClosureSize <= fd.closureSize, "主張の閉包は全体の閉包に含まれる");
+    const stmt = fd.list.filter((e) => e.inStatement).length;
+    console.log(`  主張が立脚 ${stmt} / 証明が持ち込んだ ${fd.list.length - stmt}`);
+    // 基盤の各項は、対象側の閉包のどれかの直接依存であること（辺の存在を索引で確かめる）
+    const dep = dv.inlinedIdx.dep;
+    ok(fd.list.every((e) => e.users.every((y) => (dep[y] || []).includes(e.name))), "基盤の多重度は実在する辺に対応する");
+    const groups = {};
+    for (const e of fd.list) { const g = LDR.roles.foundationGroup(e.name, nodes[e.name]); groups[g] = (groups[g] || 0) + 1; }
+    console.log(`  群: ${Object.entries(groups).map(([g, n]) => `${LDR.roles.GROUP[g].ja} ${n}`).join(" / ")}`);
+    ok(!groups.unknown, "基盤に種別不明（範囲外のスタブ）が無い（対象の依存は外部一段として全て出ている）");
+  }
+  const fc = dv.frontierClean;
+  ok(!!fc && fc.rest.every((z) => !LDR.graph.isAnnotation(z) && !LDR.graph.memberOwner(z, nodes)), "清掃後の境界に注釈と既知の構造体の成員が残らない",
+     fc ? `${fc.rest.length} 件（成員 ${[...fc.members.values()].reduce((a, b) => a + b.length, 0)} / 注釈 ${fc.annotations.length}）` : "");
+  ok(!!fc && fc.rest.length + fc.annotations.length + [...fc.members.values()].reduce((a, b) => a + b.length, 0) === dv.frontier.length, "清掃は境界の分割である（件数が合う）");
+  const axInAtoms = dv.trueMinimal.filter((n) => nodes[n].kind === "axiom");
+  const axUsed = new Set(nodes[dv.center].axioms || []);
+  if (axUsed.size && Object.values(nodes).some((n) => n.kind === "axiom")) {
+    ok([...axUsed].every((a) => axInAtoms.includes(a)), "中心が持つ公理は原子（真の極小元）に公理として並ぶ", [...axUsed].join(", "));
+  } else {
+    skip("中心が持つ公理は原子に並ぶ", "公理の宣言を持たない形式のレポート（旧い解析器）か、公理非依存の中心");
+  }
+}
+
 console.log("\n=== 経路表示（順序区間 [t,d] = ↑t ∩ ↓d）===");
 S.actions.navigate(S.derived.defaultCenter);
 const tm = S.derived.trueMinimal || [];

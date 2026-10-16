@@ -585,7 +585,7 @@
         <span class="px-2 py-1 rounded-md text-[12px] bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
               title="公理に一切依存しない宣言">公理なし ${axFree}/${own.length}</span>
         <span class="px-2 py-1 rounded-md text-[12px] bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
-              title="自分にも依存先にも条件が無い。無条件に得たものだけから無条件に得られている">無条件で閉じる ${hered}</span>
+              title="自分にも依存先にも仮定（Prop の束縛）が無い。無条件に得たものだけから無条件に得られている（インスタンス束縛は引数であって仮定ではないので数えない）">無条件で閉じる ${hered}</span>
         <span class="px-2 py-1 rounded-md text-[12px] bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
               title="仮定またはインスタンスを要求している宣言">条件付き ${cond}</span>`;
     });
@@ -766,9 +766,9 @@
     const hered = m.hered && m.hered[name];
     return hered
       ? `<span class="${cls("bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200")}"
-          title="自分に条件が無く、依存先も全て条件を持たない。無条件に得たものだけから無条件に得られている">無条件で閉じる</span>`
+          title="自分に仮定が無く、依存先も全て仮定を持たない（インスタンス束縛は引数であって仮定ではないので数えない）。無条件に得たものだけから無条件に得られている">無条件で閉じる</span>`
       : `<span class="${cls("bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300")}"
-          title="自分には条件が無いが、依存の先に条件付きのものを含む">無条件</span>`;
+          title="自分には条件が無いが、依存の先に仮定付きのものを含む">無条件</span>`;
   }
 
   /** 型・項を読める幅に畳んで出す。元の文字列は title に残す。 */
@@ -1384,20 +1384,44 @@
     });
   }
 
-  /* ================= 最小の仮定 ================= */
+  /* ================= 基盤・原子・境界 =================
+
+     キャンバス下の区画。三つのモードは同じグラフから計算できる別の数学的対象で、答える問いが違う
+     （store.state.minimalMode）。チップはどのモードでも経路の強調（順序区間 [t, c]）に使える。
+
+       基盤  ∂_T x = { z ∉ T : ∃ y ∈ ↓x ∩ T, y → z }。対象の閉包から外へ出る先。
+             型・構造体／定義／補題／配管 に分け、多重度（使う対象側の宣言の数）と、主張が立脚するか
+             （型依存だけの閉包から出る）証明が持ち込んだかを示す。
+       原子  min(↓x)。依存先を持たない宣言と公理。Mathlib の上ではどの定理でも同じ集合になる。
+       境界  ∂x。読み込んだ範囲の切れ目（範囲外へ依存が続く点）。既知の構造体の成員と注釈は外して数える。 */
+  const MODE = {
+    foundation: { l: "基盤", t: "対象の閉包から外へ出る先 ∂_T x。この結果は対象の外の何の上に立つか" },
+    atoms:      { l: "原子", t: "真の極小元 min(↓x)。依存先を持たない宣言と公理。最終的に何に還元されるか" },
+    frontier:   { l: "境界", t: "読み込んだ範囲の切れ目 ∂x。どこから先を辿っていないか（極小元ではない）" },
+  };
   function renderMinimal(st, dv) {
     const tm = dv.trueMinimal || [];
+    const mode = st.minimalMode || "foundation";
     // チップの不透明度は「いま描画対象か(n ∈ posAll)」に依存する。
     // 可視集合の指紋を鍵に含めないと、展開・深さ変更後も古い明暗のままになる。
     // 開閉（派生）でも描画対象は変わるので、開閉の署名も鍵に入れる（描画数が同じでも中身は違い得る）
     const visSig = Object.keys(dv.posAll || {}).length + "|" + st.baseDepth + "|" + st.expanded.size + "|" + S.openSignature();
-    once("min", dv.center + "|" + st.traceTarget + "|" + (dv.traceUnreachable || "") + "|" + tm.length + "|" + visSig, () => {
+    once("min", dv.center + "|" + mode + "|" + st.traceTarget + "|" + (dv.traceUnreachable || "") + "|" + tm.length + "|" + visSig, () => {
       const el = $("minimalBox");
       const vis = dv.posAll || {};
-      const fr = (dv.frontier || []).length;
-      $("minCount").textContent =
-        `${tm.length} 件 / 下方閉集合 ${dv.fullDownSize || 0} 件のうち依存先を持たないもの`
-        + (fr ? `（ほかに境界 ${fr} 件: レポートの範囲外で依存が続くもの。極小元ではない）` : "");
+      const fc = dv.frontierClean || { rest: dv.frontier || [], annotations: [], members: new Map() };
+      const fd = dv.foundation;
+      const memberCount = [...fc.members.values()].reduce((a, b) => a + b.length, 0);
+      const count = {
+        foundation: fd ? `${fd.list.length} 件（対象側の閉包 ${fd.closureSize} 件から外へ出る先。うち主張が立脚 ${fd.list.filter((e) => e.inStatement).length}）` : "宣言粒度でだけ",
+        atoms: `${tm.length} 件 / 下方閉集合 ${dv.fullDownSize || 0} 件のうち依存先を持たないもの`,
+        frontier: `${fc.rest.length} 件（範囲外へ依存が続く点）` + (memberCount ? `。既知の構造体の成員 ${memberCount} 件は構造体に畳む` : "") + (fc.annotations.length ? `。注釈 ${fc.annotations.length} 件は数えない` : ""),
+      };
+      $("minCount").textContent = count[mode];
+      if ($("minMode")) $("minMode").innerHTML = Object.keys(MODE).map((m) => `<button data-minmode="${m}" title="${esc(MODE[m].t)}"
+          class="px-2 py-0.5 text-[11px] rounded-md ${mode === m
+            ? "bg-white dark:bg-stone-700 shadow-sm text-stone-900 dark:text-stone-100"
+            : "text-stone-500 hover:text-stone-800 dark:hover:text-stone-200"}">${MODE[m].l}</button>`).join("");
       /* 公理チップ等から経路表示を求めたが、読み込んだ範囲に中心からの経路が無い。
          公理は Lean 側が証明項を最後まで辿って集めたもので、依存グラフは一段先までしか
          持たないので、両者の食い違いは起こり得る。黙って全てを暗くせず、ここで伝える。
@@ -1409,24 +1433,61 @@
              <button data-trace="${esc(dv.traceUnreachable)}" class="underline">解除</button>
            </div>` : "";
       if (dv.traceUnreachable && $("minimalWrap")) $("minimalWrap").open = true;
-      const chip = (n) => {
+      /* チップ。extra は札の追記（多重度 ×k）、dim は「証明が持ち込んだ」（主張には現れない）の薄い枠 */
+      const chip = (n, title, extra, dim) => {
         const on = st.traceTarget === n;
         const shown = n in vis;
-        return `<button data-trace="${esc(n)}" title="${esc(n)}"
+        const ax = (st.nodes[n] || {}).kind === "axiom";
+        return `<button data-trace="${esc(n)}" title="${esc(title || n)}"
           class="font-mono text-[10.5px] px-2 py-0.5 rounded-full transition
-                 bg-amber-100 text-amber-900 dark:bg-amber-950/70 dark:text-amber-200
+                 ${ax ? "bg-orange-100 text-orange-900 dark:bg-orange-950/70 dark:text-orange-200" : "bg-amber-100 text-amber-900 dark:bg-amber-950/70 dark:text-amber-200"}
+                 ${dim ? "ring-1 ring-dashed ring-amber-300 dark:ring-amber-800 bg-transparent" : ""}
                  ${on ? "ring-2 ring-amber-500" : "hover:ring-1 hover:ring-amber-400"}
-                 ${shown ? "" : "opacity-60"}">${esc(shortOf(n))}</button>`;
+                 ${shown ? "" : "opacity-60"}">${esc(shortOf(n))}${extra ? `<span class="text-[9px] text-amber-700/70 dark:text-amber-300/70"> ${extra}</span>` : ""}</button>`;
       };
-      el.innerHTML = unreachable + `
+      const head = `
         <div class="flex items-baseline gap-2 flex-wrap mb-1">
-          <span class="text-[10.5px] text-stone-500">押すとそこへ至る経路だけを表示</span>
+          <span class="text-[10.5px] text-stone-500">${esc(MODE[mode].t)}。押すとそこへ至る経路だけを表示</span>
           ${st.traceTarget ? `<button data-trace="${esc(st.traceTarget)}"
             class="text-[10.5px] px-1.5 py-0.5 rounded-sm bg-amber-500 text-white">経路表示を解除</button>` : ""}
-        </div>
-        <div class="flex flex-wrap gap-1">${tm.length
-          ? tm.map(chip).join("")
+        </div>`;
+      let body = "";
+      if (mode === "atoms") {
+        // 公理を先に、残りは名前順（公理は橙の札）
+        const list = tm.slice().sort((a, b) => (((st.nodes[b] || {}).kind === "axiom") - ((st.nodes[a] || {}).kind === "axiom")) || (a < b ? -1 : 1));
+        body = `<div class="flex flex-wrap gap-1">${list.length
+          ? list.map((n) => chip(n, `${n}（${kinfo((st.nodes[n] || {}).kind).ja}）`)).join("")
           : '<span class="text-[12px] text-stone-400">依存先がありません（この宣言自身が原始的）</span>'}</div>`;
+      } else if (mode === "frontier") {
+        const memberLine = memberCount
+          ? `<div class="text-[10px] text-stone-500 mb-1" title="${esc([...fc.members.entries()].map(([o, ls]) => `${o}: ${ls.join(", ")}`).join("\n"))}">既知の構造体の成員（射影・構成子）${memberCount} 件は構造体に畳む: ${esc([...fc.members.keys()].map(shortOf).join(", "))}</div>` : "";
+        body = memberLine + `<div class="flex flex-wrap gap-1">${fc.rest.length
+          ? fc.rest.map((n) => chip(n)).join("")
+          : '<span class="text-[12px] text-stone-400">範囲外へ続く依存はありません（閉包が読み込んだ範囲で閉じている）</span>'}</div>`;
+      } else {
+        if (!fd) {
+          body = '<span class="text-[12px] text-stone-400">基盤は宣言粒度でだけ計算します</span>';
+        } else {
+          const R = LDR.roles;
+          const groups = new Map();
+          for (const e of fd.list) {
+            const g = R.foundationGroup(e.name, st.nodes[e.name]);
+            (groups.get(g) || groups.set(g, []).get(g)).push(e);
+          }
+          const sections = R.GROUP_ORDER.filter((g) => groups.has(g)).map((g) => {
+            const es = groups.get(g).slice().sort((a, b) => (b.users.length - a.users.length) || (a.name < b.name ? -1 : 1));
+            const chips = es.map((e) => chip(e.name,
+              `${e.name}（${R.GROUP[g].ja}）\n使う対象側の宣言 ${e.users.length} 件: ${e.users.slice(0, 8).map(shortOf).join(", ")}${e.users.length > 8 ? " …" : ""}\n${e.inStatement ? "主張（型依存の閉包）が立脚する" : "証明が持ち込んだ（主張には現れない）"}`,
+              e.users.length > 1 ? `×${e.users.length}` : "", !e.inStatement)).join("");
+            return `<div class="flex items-start gap-2 mb-1">
+              <span class="text-[10px] text-stone-500 shrink-0 w-14 pt-0.5" title="${esc(R.GROUP[g].note)}">${esc(R.GROUP[g].ja)} ${es.length}</span>
+              <div class="flex flex-wrap gap-1 min-w-0">${chips}</div></div>`;
+          });
+          body = sections.join("") || '<span class="text-[12px] text-stone-400">対象の閉包は外へ出ません（対象の中で閉じている）</span>';
+          body += `<div class="text-[9.5px] text-stone-400 mt-1">実線の札は主張が立脚するもの、破線の札は証明が持ち込んだもの。×k は使う対象側の宣言の数</div>`;
+        }
+      }
+      el.innerHTML = unreachable + head + body;
     });
   }
 

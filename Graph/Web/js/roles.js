@@ -105,5 +105,35 @@
     return out;
   }
 
-  LDR.roles = { roleOf, isFrameName, split, ROLE, FRAME_NAMES };
+  /* ---- 基盤の分類 ----
+     型クラスの配管（構造体の射影 `X.toY`・インスタンス・構成子 `mk`）は数が多く、補題・定義の行を
+     埋める。レポートの境界とビューアの基盤で同じ判定を使う（二か所で別々に組むと必ず乖離する）。 */
+  function isPlumbing(name, node) {
+    const nd = node || {};
+    const u = LDR.sig ? LDR.sig.userName(name) : String(name);
+    return !!nd.isInstance || nd.kind === "constructor" || nd.originRel === "member"
+      || /\.(to[A-Z][^.]*|inst[A-Z][^.]*|mk)$/.test(u) || /^inst[A-Z]/.test(u);
+  }
+  /** 基盤の群: "type"（型・構造体）/ "def"（定義）/ "lemma"（補題）/ "plumbing"（配管）/ "axiom"。
+      範囲外のスタブ（種別不明）は "unknown"。 */
+  function foundationGroup(name, node) {
+    const nd = node || {};
+    if (nd.stub) return "unknown";
+    if (nd.kind === "axiom") return "axiom";
+    if (isPlumbing(name, nd)) return "plumbing";
+    if (nd.kind === "inductive") return "type";
+    if (nd.isProp) return "lemma";
+    return "def";
+  }
+  const GROUP = {
+    axiom:    { ja: "公理",      note: "これ以上遡れない仮定" },
+    type:     { ja: "型・構造体", note: "帰納型・構造体・型クラス" },
+    def:      { ja: "定義",      note: "定義（命題でないもの）" },
+    lemma:    { ja: "補題",      note: "既に証明された言明" },
+    plumbing: { ja: "配管",      note: "型クラスの配管（射影・インスタンス・構成子）" },
+    unknown:  { ja: "不明",      note: "範囲外で種別が分からない" },
+  };
+  const GROUP_ORDER = ["axiom", "type", "def", "lemma", "plumbing", "unknown"];
+
+  LDR.roles = { roleOf, isFrameName, split, ROLE, FRAME_NAMES, isPlumbing, foundationGroup, GROUP, GROUP_ORDER };
 })(window.LDR = window.LDR || {});

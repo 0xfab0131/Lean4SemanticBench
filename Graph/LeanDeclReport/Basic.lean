@@ -350,6 +350,16 @@ def classifyArgs (e : Expr) (withShapes : Bool := true) : MetaM ArgClassificatio
 def collectConsts (e : Expr) : NameSet :=
   e.foldConsts ({} : NameSet) fun n acc => acc.insert n
 
+/-- elaborator の注釈。数学的内容を持たない定数で、依存として数えない。
+    `autoParam T stx` はフィールドの既定戦術（`:= by …`）、`optParam` は既定値、`outParam` /
+    `semiOutParam` は型クラス解決の向きの指定。いずれも `id` 相当の包みで、`collectAxioms` にも
+    寄与しない。構成子の型を依存に加えると、構造体のフィールドからこれらが大量に入る
+    （cslib で `Field → autoParam` や `HAdd → outParam` を実測）。既定戦術の構文を保持する補助宣言
+    `X.f._autoParam` も同じ理由で外す。 -/
+def isAnnotationConst (n : Name) : Bool :=
+  n == ``autoParam || n == ``optParam || n == ``outParam || n == ``semiOutParam ||
+  (match n with | .str _ s => s == "_autoParam" | _ => false)
+
 /--
 直接依存を **型依存** と **値依存** に分ける。
 
@@ -404,9 +414,9 @@ def directDepsOfCore (env : Environment) (n : Name) : DirectDeps :=
       | some v => collectConsts v
       | none   => {}
     let tD := fromType.foldl (init := ({} : NameSet)) fun acc m =>
-      if m == n || block.contains m then acc else acc.insert m
+      if m == n || block.contains m || isAnnotationConst m then acc else acc.insert m
     let vD := fromValue.foldl (init := ({} : NameSet)) fun acc m =>
-      if m == n || fromType.contains m then acc else acc.insert m
+      if m == n || fromType.contains m || isAnnotationConst m then acc else acc.insert m
     { typeDeps := tD, valueDeps := vD }
 
 /-! ## 共有キャッシュ

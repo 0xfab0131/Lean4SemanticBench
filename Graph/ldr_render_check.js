@@ -121,10 +121,34 @@ if (facet) {
   S.actions.navigate(facet); render();
   ok(html("inspector").includes("固定") || html("depBody").includes("固定"), "派生を中心にすると「固定」の表示が出る", facet.split(".").slice(-2).join("."));
 }
-// 極小元: 到達不能なら details が開く
+// 基盤・原子・境界: 到達不能なら details が開く
 S.actions.navigate(cen); S.actions.setTrace("__no_such__"); render();
-ok(document.getElementById("minimalWrap").open === true && html("minimalBox").includes("ありません"), "到達不能の通知で極小元の区画が開く");
+ok(document.getElementById("minimalWrap").open === true && html("minimalBox").includes("ありません"), "到達不能の通知で基盤の区画が開く");
 S.actions.setTrace("__no_such__");
+/* 三つのモード。既定は基盤（群の見出しと ×k の多重度）、原子は公理を先に、境界は清掃後の件数。
+   切替は store の状態で、区画の見出しに切替の札が出る。 */
+{
+  render();
+  const fd = S.derived.foundation;
+  ok(S.state.minimalMode === "foundation" && !!fd && html("minMode").includes('data-minmode="atoms"') && html("minMode").includes('data-minmode="frontier"'),
+     "区画の既定は基盤で、見出しに原子・境界への切替がある", fd ? `${fd.list.length} 件` : "");
+  const groupsShown = ["型・構造体", "定義", "補題", "配管"].filter((g) => html("minimalBox").includes(g + " "));
+  ok(fd && (fd.list.length === 0 || groupsShown.length > 0) && (fd.list.every((e) => S.state.nodes[e.name] && S.state.nodes[e.name].external)),
+     "基盤は対象の外の宣言だけで、群（型・構造体／定義／補題／配管）に分けて出る", groupsShown.join("/"));
+  ok(!fd || fd.list.every((e) => e.users.length >= 1 && e.users.every((y) => S.state.nodes[y] && !S.state.nodes[y].external)),
+     "基盤の各項は、対象側の宣言から少なくとも一本の辺で使われている");
+  S.actions.setMinimalMode("atoms"); render();
+  const atoms = S.derived.trueMinimal;
+  const axFirst = atoms.filter((n) => S.state.nodes[n].kind === "axiom");
+  ok(S.state.minimalMode === "atoms" && document.getElementById("minCount").textContent.includes("依存先を持たない")
+     && (!axFirst.length || html("minimalBox").indexOf(axFirst[0]) < html("minimalBox").indexOf(atoms.find((n) => S.state.nodes[n].kind !== "axiom") || "\u0000")),
+     "原子のモードでは公理が先に並ぶ", `原子 ${atoms.length}（公理 ${axFirst.length}）`);
+  S.actions.setMinimalMode("frontier"); render();
+  const fc = S.derived.frontierClean;
+  ok(S.state.minimalMode === "frontier" && !!fc && fc.rest.every((z) => !LDR.graph.isAnnotation(z) && !LDR.graph.memberOwner(z, S.state.nodes)),
+     "境界のモードは注釈と既知の構造体の成員を外した残りだけ", fc ? `${fc.rest.length} 件（成員 ${[...fc.members.values()].reduce((a, b) => a + b.length, 0)} / 注釈 ${fc.annotations.length}）` : "");
+  S.actions.setMinimalMode("foundation"); render();
+}
 // 束ね: パッケージ
 S.actions.setGroupBy("package"); render();
 ok(Object.keys(S.derived.posAll).length > 1, "束ね=パッケージでも配置できる", Object.keys(S.derived.posAll).length + " 節点");
@@ -135,7 +159,7 @@ ok(Object.keys(S.derived.posAll).length > 1, "束ね=パッケージでも配置
   S.actions.navigate(cen);
   const rc = R.build("center", { sections: R.ALL, depth: 2 });
   const isPropCen = !!S.state.nodes[cen].isProp;
-  ok(rc.ok && rc.text.startsWith("# ") && [isPropCen ? "## 主張" : "## 定義", "## 型依存", "## 値依存", "## 公理の由来", isPropCen ? "## 導出図" : "## 構成図", "## 極小元", "## 主張で参照", "## 計量", "## 来歴"].every((h) => rc.text.includes(h)),
+  ok(rc.ok && rc.text.startsWith("# ") && [isPropCen ? "## 主張" : "## 定義", "## 型依存", "## 値依存", "## 公理の由来", isPropCen ? "## 導出図" : "## 構成図", "## 基盤", "原子 min(↓x)", "## 境界", "## 主張で参照", "## 計量", "## 来歴"].every((h) => rc.text.includes(h)),
      "中心のレポートに全ての章がある（命題なら導出図、定義なら構成図）", `${rc.text.split("\n").length} 行`);
   ok(!rc.text.includes("## 経路") && !rc.text.includes("## 注記"), "中心のレポートに経路の章は無く、注記は選ばない限り入らない");
   const rn = R.build("center", { sections: ["claim", "notes"], fullNames: false });
@@ -190,13 +214,13 @@ ok(Object.keys(S.derived.posAll).length > 1, "束ね=パッケージでも配置
   if (process.env.LDR_DUMP) fs.writeFileSync(path.join(process.env.LDR_DUMP, "selected.md"), rs.text);
   const tm = S.derived.trueMinimal[0];
   const rm0 = R.build("minimal", { sections: R.ALL });
-  ok(!rm0.ok, "極小元が選ばれていなければ理由を返す");
+  ok(!rm0.ok, "経路の対象が選ばれていなければ理由を返す");
   if (tm) {
     S.actions.setTrace(tm);
     const rm = R.build("minimal", { sections: ["claim", "path", "refs", "figures"], depth: 1 });
-    ok(rm.ok && rm.text.includes("## 経路") && rm.text.includes("## 主張で参照"), "極小元のレポートに経路と参照が入る", LDR.sig.shortName(tm));
+    ok(rm.ok && rm.text.includes("## 経路") && rm.text.includes("## 主張で参照"), "経路の対象のレポートに経路と参照が入る", LDR.sig.shortName(tm));
     const mm = checkBlocks(rm.text);
-    ok(mm.n === 1 && !mm.bad.length, "極小元のレポートの経路にも図が付く", mm.bad.slice(0, 3).join("; "));
+    ok(mm.n === 1 && !mm.bad.length, "経路の対象のレポートの経路にも図が付く", mm.bad.slice(0, 3).join("; "));
     if (process.env.LDR_DUMP) fs.writeFileSync(path.join(process.env.LDR_DUMP, "minimal.md"), rm.text);
     S.actions.setTrace(tm);
   }

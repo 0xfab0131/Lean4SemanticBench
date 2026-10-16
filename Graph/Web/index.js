@@ -33,8 +33,10 @@
       "[data-nav],[data-sel],[data-trace],[data-tab],[data-kind],[data-edge],[data-gran]," +
       "[data-ref],[data-list],[data-filter],[data-tree],[data-hist],[data-pin],[data-unpin]," +
       "[data-group],[data-density],[data-preview],[data-follow],[data-deriv],[data-cluster]," +
-      "[data-pback],[data-pfwd],[data-hl]");
+      "[data-pback],[data-pfwd],[data-hl],[data-minmode]");
     if (!t) return;
+    // 基盤／原子／境界の切替（summary の中にあるので、details の開閉には伝えない）
+    if (t.dataset.minmode !== undefined) { e.preventDefault(); S.actions.setMinimalMode(t.dataset.minmode); return; }
     if (t.dataset.pback !== undefined) { S.actions.previewBack(); return; }
     if (t.dataset.pfwd !== undefined) { S.actions.previewForward(); return; }
     // 単クリック = グラフで経路を強調（プレビューは動かさない）、素早い 2 回目 = プレビューだけその宣言へ
@@ -440,7 +442,7 @@
     const subj = [
       { k: "center", l: "中心", n: dv.center, t: "グラフの中心" },
       { k: "selected", l: "選択", n: st.selected && st.selected !== dv.center ? st.selected : null, t: "グラフや一覧で押した宣言（中心と異なるもの）" },
-      { k: "minimal", l: "極小元", n: st.traceTarget, t: "経路表示の対象（極小元・公理のチップで選んだもの）" },
+      { k: "minimal", l: "経路の対象", n: st.traceTarget, t: "経路表示の対象（基盤・原子・境界・公理のチップで選んだもの）" },
     ];
     $("reportSubject").innerHTML = `<span class="text-[11.5px] text-stone-500 mr-1">主語</span>` + subj.map((s) => `<button data-rsubj="${s.k}" ${s.n ? "" : "disabled"}
         title="${s.t}${s.n ? "" : "（いまは無い）"}"

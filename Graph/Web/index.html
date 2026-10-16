@@ -163,7 +163,7 @@
       <summary class="px-3 h-9 flex items-center rounded-md text-[13px] border border-stone-300 dark:border-stone-600
                       hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer select-none list-none" title="証明の構造を Markdown のレポートにして写す・保存する">📄 レポート ▾</summary>
       <div class="popPanel w-[min(440px,92vw)]">
-        <div class="text-[11px] text-stone-500 leading-relaxed">主語を選び、章を選んで「プレビュー」。事実は元の依存グラフで測り、型依存／値依存・導出図・極小元・経路を Markdown にまとめます。</div>
+        <div class="text-[11px] text-stone-500 leading-relaxed">主語を選び、章を選んで「プレビュー」。事実は元の依存グラフで測り、型依存／値依存・公理の由来・導出図・基盤・境界・経路を Markdown にまとめます。</div>
         <div class="flex items-center gap-1 flex-wrap" id="reportSubject"></div>
         <div id="reportSections" class="grid grid-cols-1 gap-y-0.5 text-[11.5px]"></div>
         <div class="flex items-center gap-2 text-[11.5px] text-stone-500">導出図の深さ
@@ -236,7 +236,10 @@
             一覧の「派生を全て開く」は全ての由来を開く／畳む操作で、個別の開閉と同じ集合を動かす。</div>
           <div><b>断片</b>: 証明・本体から切り出された補助（_proof_1 / match_1）。由来に埋め戻し、節点には出さない。
             <b>骨組み</b>: 論理結合子（And.intro / Eq.mpr）。「表示 ▾」で通り抜けを切り替える。</div>
-          <div><b>経路</b>: 極小元のチップや公理のチップを押すと、中心からそこへ至る順序区間 [t, c] = ↑t ∩ ↓c を
+          <div><b>基盤・原子・境界</b>（キャンバス下）: 基盤 ∂_T x は対象の閉包から外へ出る先（この結果は対象の外の何の上に立つか。
+            型・構造体／定義／補題／配管、×k は使う対象側の宣言の数、破線の札は証明が持ち込んだもの）。原子 min(↓x) は依存先を持たない宣言と公理。
+            境界 ∂x は読み込んだ範囲の切れ目（既知の構造体の成員と注釈は数えない）。</div>
+          <div><b>経路</b>: 基盤・原子・境界のチップや公理のチップを押すと、中心からそこへ至る順序区間 [t, c] = ↑t ∩ ↓c を
             元の依存グラフで取り、区間に含まれる派生の由来を自動で開いて強調する（畳んだ派生の中だけを通る経路でも反応する）。</div>
           <div><b>パッケージ</b>: 対象の外の宣言は縁の色で出どころ（<span style="color:#0284C7">Mathlib</span>
             <span style="color:#16A34A">cslib</span> <span style="color:#78716C">core</span> …）を示す。凡例はグラフ左上。
@@ -247,7 +250,7 @@
             「原文」はソースの宣言範囲そのもの、「型（Lean の表示）」は Lean が整形した型。凡例（グラフ左上）は指すと展開。
             枠付きのものは押せる（docs・公理・由来・派生・↗）、平らな札は押せない。導出図では前提の名前を押すとその場で開閉し、
             行末の ↗ でその宣言へ移る（‹ で戻れる）。語彙の札は、クリックでグラフの経路を強調、ダブルクリックでプレビューだけ移る。</div>
-          <div><b>レポート</b>（上部バー）: 中心／選択／極小元を主語に、主張・型依存・値依存・公理の由来・導出図・極小元・参照・経路・計量・来歴を Markdown で写す。
+          <div><b>レポート</b>（上部バー）: 中心／選択／経路の対象を主語に、主張・型依存・値依存・公理の由来・導出図・基盤・境界・参照・経路・計量・来歴を Markdown で写す。
             章「付録: 図」を選ぶと、公理の流入・導出図・境界・経路の Mermaid 図を末尾にまとめる（本文には挟まない）。</div>
           <div><kbd>/</kbd>検索 <kbd>t</kbd>型のみ <kbd>m</kbd>粒度 <kbd>v</kbd>下錐 <kbd>p</kbd>ピン <kbd>0</kbd>全体 <kbd>f</kbd>集中 <kbd>[</kbd><kbd>]</kbd>見た宣言の前後</div>
       </div>
@@ -361,10 +364,11 @@
            折り返して見切れる。件数は見出しに出しておくので閉じていても分かる。 -->
       <details id="minimalWrap" class="shrink-0 border-t border-stone-200 dark:border-stone-800
                                        bg-white dark:bg-stone-900">
-        <summary class="px-4 py-1.5 cursor-pointer select-none flex items-baseline gap-2
+        <summary class="px-4 py-1.5 cursor-pointer select-none flex items-center gap-2
                         hover:bg-stone-50 dark:hover:bg-stone-800/50">
-          <span class="text-[12px] font-medium">真の極小元 min(↓d)</span>
-          <span id="minCount" class="text-[11px] text-stone-500"></span>
+          <!-- 三つのモード（基盤 ∂_T x / 原子 min(↓d) / 境界 ∂x）。中身は js/panels.js renderMinimal -->
+          <span id="minMode" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800 shrink-0"></span>
+          <span id="minCount" class="text-[11px] text-stone-500 truncate"></span>
         </summary>
         <section id="minimalBox" class="px-4 pb-2 max-h-[32vh] overflow-y-auto"></section>
       </details>
