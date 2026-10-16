@@ -236,9 +236,10 @@
             一覧の「派生を全て開く」は全ての由来を開く／畳む操作で、個別の開閉と同じ集合を動かす。</div>
           <div><b>断片</b>: 証明・本体から切り出された補助（_proof_1 / match_1）。由来に埋め戻し、節点には出さない。
             <b>骨組み</b>: 論理結合子（And.intro / Eq.mpr）。「表示 ▾」で通り抜けを切り替える。</div>
-          <div><b>基盤・原子・境界</b>（キャンバス下）: 基盤 ∂_T x は対象の閉包から外へ出る先（この結果は対象の外の何の上に立つか。
-            型・構造体／定義／補題／配管、×k は使う対象側の宣言の数、破線の札は証明が持ち込んだもの）。原子 min(↓x) は依存先を持たない宣言と公理。
-            境界 ∂x は読み込んだ範囲の切れ目（既知の構造体の成員と注釈は数えない）。</div>
+          <div><b>基盤・原子・境界</b>（キャンバス下）: 依存グラフは対象の外を一段しか持たない（既知の範囲 K = 対象＋内部補助＋外部一段）。
+            基盤 ∂_T x は対象の閉包から外へ出る先（この結果は対象の外の何の上に立つか。型・構造体／定義／補題／配管、×k は使う対象側の宣言の数、
+            破線の札は証明が持ち込んだもの。対象の依存は全て既知なので切れ目に依存しない）。原子は K の中で依存先を持たない宣言と公理
+            （境界の先にも原子はあり得るので一覧は不完全）。境界 ∂x は K の切れ目で、極小元ではない（既知の構造体の成員と注釈は数えない）。</div>
           <div><b>経路</b>: 基盤・原子・境界のチップや公理のチップを押すと、中心からそこへ至る順序区間 [t, c] = ↑t ∩ ↓c を
             元の依存グラフで取り、区間に含まれる派生の由来を自動で開いて強調する（畳んだ派生の中だけを通る経路でも反応する）。</div>
           <div><b>パッケージ</b>: 対象の外の宣言は縁の色で出どころ（<span style="color:#0284C7">Mathlib</span>
@@ -264,7 +265,7 @@
 
     <!-- ============ 左: 宣言一覧 ============ -->
     <aside id="sidebar" class="flex flex-col shrink-0 border-r border-stone-200 dark:border-stone-800
-                               bg-white dark:bg-stone-900" style="width:264px">
+                               bg-white dark:bg-stone-900" style="width:280px">
       <div class="p-2 space-y-2 border-b border-stone-200 dark:border-stone-800">
         <input id="search" type="text" placeholder="検索  ( / )"
           class="w-full h-9 px-3 text-[12.5px] rounded-md bg-stone-100 dark:bg-stone-800
@@ -377,7 +378,7 @@
     <!-- ============ 右: 依存・参照 / 履歴 / ピン ============ -->
     <div class="resizer" data-resize="right"></div>
     <aside id="sideR" class="flex flex-col shrink-0 border-l border-stone-200 dark:border-stone-800
-                  bg-white dark:bg-stone-900" style="width:312px">
+                  bg-white dark:bg-stone-900" style="width:330px">
       <div id="depTabs" class="shrink-0 p-2 flex gap-1 flex-wrap border-b border-stone-200 dark:border-stone-800"></div>
       <div id="depBody" class="flex-1 min-h-0 overflow-y-auto p-1.5"></div>
     </aside>

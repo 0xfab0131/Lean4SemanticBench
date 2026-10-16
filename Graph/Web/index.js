@@ -228,7 +228,8 @@
       const el = which === "left" ? $("sidebar") : $("sideR");
       const saved = parseInt(localStorage.getItem("ldr-w-" + which) || "", 10);
       const cap = Math.round(window.innerWidth * (which === "left" ? 0.24 : 0.34));
-      const def = which === "left" ? 264 : 330;
+      // 既定の幅。左は絞り込みの札二つが一行に、右は依存のタブ六つが一行に収まる幅（実測）
+      const def = which === "left" ? 280 : 330;
       el.style.width = Math.max(190, Math.min(Number.isFinite(saved) ? saved : def, cap)) + "px";
     }
 

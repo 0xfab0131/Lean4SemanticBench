@@ -51,7 +51,7 @@
   const ROW_H = 29;
   const UNIT = 14;                              // 一段の字下げ
   const colX = (k) => 8 + k * UNIT;             // 列 k のガイド線の x（見出しの ▾ の中央）
-  const V = { host: null, win: null, spacer: null, sticky: null, rows: [], top: 0, raf: 0 };
+  const V = { host: null, win: null, spacer: null, sticky: null, rows: [], top: 0, raf: 0, wantReveal: -1 };
 
   function vmount() {
     const host = $("declList");
@@ -68,6 +68,18 @@
       if (V.raf) return;
       V.raf = requestAnimationFrame(() => { V.raf = 0; vpaint(); });
     }, { passive: true });
+    /* 窓はその瞬間の高さとスクロール位置で描く。起動時の描画はレポートの読み込み（IndexedDB と
+       埋め込みスクリプトを待つ非同期）の後に走り、その時点では欄の高さが確定していないことがある
+       （Tailwind の実行時コンパイル・幅の復元・欄の開閉）。高さが後から変わっても scroll 事象は
+       起きないので、何かに触るまで一覧が空のままだった（実測）。高さの変化そのものを監視して描き直し、
+       中心の行への送り（revealRow）も高さが確定してから行う。 */
+    if (typeof ResizeObserver === "function") {
+      new ResizeObserver(() => {
+        if (!V.host.clientHeight) return;
+        vpaint();
+        if (V.wantReveal >= 0) { const i = V.wantReveal; V.wantReveal = -1; revealRow(i); }
+      }).observe(host);
+    }
     // 固定した見出しを押すと、その見出しの行まで戻る
     host.addEventListener("click", (e) => {
       const j = e.target.closest("[data-jump]");
@@ -138,7 +150,9 @@
      既に見えている行には触らない。 */
   function revealRow(i) {
     if (i < 0 || !V.host) return;
-    const h = V.host.clientHeight || 400;
+    // 高さが無い（まだ配置されていない・畳まれている）間は送れない。高さが付いたときに送る（vmount の監視）
+    if (!V.host.clientHeight) { V.wantReveal = i; return; }
+    const h = V.host.clientHeight;
     const top = i * ROW_H;
     if (top >= V.host.scrollTop && top + ROW_H <= V.host.scrollTop + h) return;
     V.host.scrollTop = Math.max(0, top - h / 2 + ROW_H / 2);
@@ -600,8 +614,9 @@
     const facets = Object.values(dv.facetCount || {}).reduce((a, b) => a + b, 0);
     const allOpen = S.allFacetsOpen();
     once("filters", [sorry, facets, st.onlySorry, allOpen, st.openClusters.size].join("|"), () => {
+      // 札の内側では折り返さない（「sorry のみ／(0)」と二行に割れた。実測）。狭ければ札ごと次の行へ
       const tog = (id, on, label, title) => `<button data-filter="${id}" title="${esc(title)}"
-        class="px-2 py-1 rounded-md text-[11.5px] flex items-center gap-1.5 border
+        class="px-2 py-1 rounded-md text-[11.5px] flex items-center gap-1.5 border whitespace-nowrap
           ${on ? "bg-stone-900 text-white border-stone-900 dark:bg-stone-100 dark:text-stone-900 dark:border-stone-100"
                : "bg-white text-stone-600 border-stone-300 hover:bg-stone-100 dark:bg-stone-900 dark:text-stone-300 dark:border-stone-600 dark:hover:bg-stone-800"}">
         <span class="text-[11px]">${on ? "☑" : "☐"}</span>${label}</button>`;
@@ -895,14 +910,18 @@
                <span class="text-stone-400">（別のデータで選んだ宣言か、ピンの復元先が無い）</span></div>`;
         return;
       }
+      /* 二行の固定構成。一行目は名前（長ければ省略。完全名は title と上部バー・右パネルにある）と種別・所在、
+         二行目は印と公理。全部を一つの折り返し行に置くと、長い名前が三行を使い、グラフの高さを奪った（実測）。 */
       el.innerHTML = `
-        <div class="flex items-center gap-2 flex-wrap">
-          <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-indigo-600 text-white" title="グラフの中心。右パネルは選択中の宣言を出す（追従）か、この中心に固定できる">中心</span>
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-indigo-600 text-white shrink-0" title="グラフの中心。右パネルは選択中の宣言を出す（追従）か、この中心に固定できる">中心</span>
           ${dot(nd.kind, 8)}
-          <span class="font-mono text-[12.5px] font-medium break-all leading-tight">${esc(name)}</span>
-          <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300">${kinfo(nd.kind).ja}</span>
-          <span class="font-mono text-[9.5px] text-stone-500" title="${esc(nd.module)}">${esc(shortOf(nd.module))}${nd.line ? ":" + nd.line : ""}</span>
+          <span class="font-mono text-[12.5px] font-medium truncate min-w-0" title="${esc(name)}">${esc(name)}</span>
+          <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 shrink-0">${kinfo(nd.kind).ja}</span>
+          <span class="font-mono text-[9.5px] text-stone-500 shrink-0 whitespace-nowrap" title="${esc(nd.module)}">${esc(shortOf(nd.module))}${nd.line ? ":" + nd.line : ""}</span>
           ${pkgChip(nd)}
+        </div>
+        <div class="flex items-center gap-1.5 flex-wrap mt-1">
           ${markChips(name, nd, dv, false)}
           ${nd.axioms.length
             ? `<span class="text-[10px] text-stone-500">公理</span>${axiomChips(nd, st, false)}`
@@ -1307,8 +1326,9 @@
         refV:  { list: idx.refValue[name] || [], label: "↓証明", title: "証明で参照: この宣言を証明の道具として使う宣言",
                  note: `<b>${s} を証明の道具としてのみ使う</b>宣言。主張には現れないので、${s} について何かを述べているわけではない。` },
       };
+      // 六つの札が既定の幅（330px）で一行に収まる大きさ（二段に割れていた。実測）
       const mk = (id, label, title) => `<button data-tab="${id}" title="${esc(title || "")}"
-        class="px-2 py-1 text-[11px] rounded-md whitespace-nowrap ${cur === id
+        class="px-1.5 py-1 text-[10.5px] rounded-md whitespace-nowrap ${cur === id
           ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
           : "text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800"}">${label}</button>`;
       tabs.innerHTML = mk("prev", "プレビュー", "見ている宣言の原文・シグネチャ・導出図") + mk("laws", "法則", "法則の在庫表（関係 × 法則）")
@@ -1399,12 +1419,15 @@
 
        基盤  ∂_T x = { z ∉ T : ∃ y ∈ ↓x ∩ T, y → z }。対象の閉包から外へ出る先。
              型・構造体／定義／補題／配管 に分け、多重度（使う対象側の宣言の数）と、主張が立脚するか
-             （型依存だけの閉包から出る）証明が持ち込んだかを示す。
-       原子  min(↓x)。依存先を持たない宣言と公理。Mathlib の上ではどの定理でも同じ集合になる。
-       境界  ∂x。読み込んだ範囲の切れ目（範囲外へ依存が続く点）。既知の構造体の成員と注釈は外して数える。 */
+             （型依存だけの閉包から出る）証明が持ち込んだかを示す。対象の依存は全て外部一段として
+             既知なので、この集合は読み込んだ範囲の切れ目に依存しない（正確）。
+       原子  既知の範囲 K（対象＋内部補助＋外部一段）での min(↓x ∩ K)。依存先を持たない宣言は全環境でも
+             原子（依存ゼロは環境の事実）だが、境界の先にも原子はあり得るので一覧としては不完全。公理は別の行。
+       境界  ∂x = ↓x ∖ K。読み込んだ範囲の切れ目（範囲外へ依存が続く点）。極小元ではない。
+             既知の構造体の成員と注釈は外して数える。 */
   const MODE = {
-    foundation: { l: "基盤", t: "対象の閉包から外へ出る先 ∂_T x。この結果は対象の外の何の上に立つか" },
-    atoms:      { l: "原子", t: "真の極小元 min(↓x)。依存先を持たない宣言と公理。最終的に何に還元されるか" },
+    foundation: { l: "基盤", t: "対象の閉包から外へ出る先 ∂_T x。この結果は対象の外の何の上に立つか（切れ目に依存しない）" },
+    atoms:      { l: "原子", t: "既知の範囲での min(↓x)。依存先を持たない宣言と公理。境界の先にも原子はあり得る（一覧は不完全）" },
     frontier:   { l: "境界", t: "読み込んだ範囲の切れ目 ∂x。どこから先を辿っていないか（極小元ではない）" },
   };
   function renderMinimal(st, dv) {
@@ -1422,7 +1445,7 @@
       const memberCount = [...fc.members.values()].reduce((a, b) => a + b.length, 0);
       const count = {
         foundation: fd ? `${fd.list.length} 件（対象側の閉包 ${fd.closureSize} 件から外へ出る先。うち主張が立脚 ${fd.list.filter((e) => e.inStatement).length}）` : "宣言粒度でだけ",
-        atoms: `${tm.length} 件 / 下方閉集合 ${dv.fullDownSize || 0} 件のうち依存先を持たないもの`,
+        atoms: `${tm.length} 件（既知の下方閉集合 ${dv.fullDownSize || 0} 件のうち依存先を持たないもの。境界の先は数えていない）`,
         frontier: `${fc.rest.length} 件（範囲外へ依存が続く点）` + (memberCount ? `。既知の構造体の成員 ${memberCount} 件は構造体に畳む` : "") + (fc.annotations.length ? `。注釈 ${fc.annotations.length} 件は数えない` : ""),
       };
       $("minCount").textContent = count[mode];
@@ -1466,9 +1489,9 @@
         const cen = st.nodes[dv.center] || {};
         const axs = (cen.axioms || []).filter((a) => st.nodes[a]);
         const list = tm.slice().sort();
-        body = (axs.length ? `<div class="flex items-start gap-2 mb-1"><span class="text-[10px] text-stone-500 shrink-0 w-14 pt-0.5" title="これ以上遡れない仮定。型が Eq・Iff を参照するので依存順序の原子ではない">公理 ${axs.length}</span>
+        body = (axs.length ? `<div class="flex items-start gap-2 mb-1"><span class="text-[10px] text-stone-500 shrink-0 min-w-[5.5em] whitespace-nowrap pt-0.5" title="これ以上遡れない仮定。型が Eq・Iff を参照するので依存順序の原子ではない">公理 ${axs.length}</span>
             <div class="flex flex-wrap gap-1 min-w-0">${axs.map((a) => chip(a, `${a}（公理）`)).join("")}</div></div>` : "")
-          + `<div class="flex items-start gap-2"><span class="text-[10px] text-stone-500 shrink-0 w-14 pt-0.5" title="依存先を持たない宣言（語彙の原子）">原子 ${list.length}</span>
+          + `<div class="flex items-start gap-2"><span class="text-[10px] text-stone-500 shrink-0 min-w-[5.5em] whitespace-nowrap pt-0.5" title="依存先を持たない宣言（語彙の原子）。読み込んだ範囲の中で見つかったもの。境界の先にも原子はあり得る">原子 ${list.length}</span>
             <div class="flex flex-wrap gap-1 min-w-0">${list.length
               ? list.map((n) => chip(n, `${n}（${kinfo((st.nodes[n] || {}).kind).ja}）`)).join("")
               : '<span class="text-[12px] text-stone-400">依存先がありません（この宣言自身が原始的）</span>'}</div></div>`;
@@ -1494,7 +1517,7 @@
               `${e.name}（${R.GROUP[g].ja}）\n使う対象側の宣言 ${e.users.length} 件: ${e.users.slice(0, 8).map(shortOf).join(", ")}${e.users.length > 8 ? " …" : ""}\n${e.inStatement ? "主張（型依存の閉包）が立脚する" : "証明が持ち込んだ（主張には現れない）"}`,
               e.users.length > 1 ? `×${e.users.length}` : "", !e.inStatement)).join("");
             return `<div class="flex items-start gap-2 mb-1">
-              <span class="text-[10px] text-stone-500 shrink-0 w-14 pt-0.5" title="${esc(R.GROUP[g].note)}">${esc(R.GROUP[g].ja)} ${es.length}</span>
+              <span class="text-[10px] text-stone-500 shrink-0 min-w-[5.5em] whitespace-nowrap pt-0.5" title="${esc(R.GROUP[g].note)}">${esc(R.GROUP[g].ja)} ${es.length}</span>
               <div class="flex flex-wrap gap-1 min-w-0">${chips}</div></div>`;
           });
           body = sections.join("") || '<span class="text-[12px] text-stone-400">対象の閉包は外へ出ません（対象の中で閉じている）</span>';
@@ -1518,8 +1541,9 @@
       st.expanded.size, [...st.kindFilter].sort().join(","), st.listMode,
       st.groupBy, st.density, st.hideFrame,
       Object.keys(st.nodes).length, dv.center].join("|"), () => {
+      // 区切りボタンの内側では折り返さない（「モジュ／ール」と割れた。実測）
       const seg = (id, cur2, opts) => opts.map((o) => `<button data-${id}="${o.v}" title="${esc(o.t || "")}"
-        class="px-2.5 py-1 text-[12.5px] rounded-md ${cur2 === o.v
+        class="px-2 py-1 text-[12px] rounded-md whitespace-nowrap ${cur2 === o.v
           ? "bg-white dark:bg-stone-700 shadow-sm text-stone-900 dark:text-stone-100"
           : "text-stone-500 hover:text-stone-800 dark:hover:text-stone-200"}">${o.l}</button>`).join("");
       $("segEdge").innerHTML = seg("edge", st.edgeMode, [{ v: "all", l: "型+値" }, { v: "type", l: "型のみ" }]);
