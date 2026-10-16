@@ -365,10 +365,14 @@ cmd_report() {
         fi
       fi
     fi
+    # 並列数。CI の小さな runner(4 コア・7 GB)で Mathlib 系のコンパイルを全コアで走らせると
+    # メモリ不足で落ちるので、L4SB_LAKE_JOBS で抑えられるようにする(未指定なら Lake の既定)。
+    local -a jobs=()
+    if [ -n "${L4SB_LAKE_JOBS:-}" ]; then jobs=(-j "$L4SB_LAKE_JOBS"); info "lake の並列数: $L4SB_LAKE_JOBS"; fi
     info "対象をビルドします: ${mods[*]}"
-    if ! ( cd "$target" && lake build "${mods[@]}" ) >&2; then
+    if ! ( cd "$target" && lake build ${jobs[@]+"${jobs[@]}"} "${mods[@]}" ) >&2; then
       info "指定名でのビルドに失敗。既定ターゲットで再試行します (lake build)"
-      ( cd "$target" && lake build ) >&2 \
+      ( cd "$target" && lake build ${jobs[@]+"${jobs[@]}"} ) >&2 \
         || die "対象のビルドに失敗しました(古い olean を解析しないため中断します)"
     fi
   fi
@@ -377,7 +381,9 @@ cmd_report() {
   #     ビルドと実行を分離することで、解析器の stdout(JSONL)に
   #     ビルド系の出力が混ざる余地を構造的に無くす。
   info "解析器をビルドします"
-  ( cd "$sat" && lake build decl_report ) >&2 \
+  local -a sjobs=()
+  if [ -n "${L4SB_LAKE_JOBS:-}" ]; then sjobs=(-j "$L4SB_LAKE_JOBS"); fi
+  ( cd "$sat" && lake build ${sjobs[@]+"${sjobs[@]}"} decl_report ) >&2 \
     || die "解析器のビルドに失敗しました。対象の toolchain ($L4SB_TOOLCHAIN) が本ツールの対応範囲外の可能性があります"
   local bin="$sat/.lake/build/bin/decl_report"
   [ -x "$bin" ] || die "解析器の実行ファイルが見つかりません: $bin"

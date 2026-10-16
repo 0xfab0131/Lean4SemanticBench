@@ -1,14 +1,23 @@
-# cslib（Commitment / SecretSharing）の解析結果を GitHub Pages に配置する。
+# お題（cslib の Commitment / SecretSharing）の解析結果を表示するビューアを GitHub Pages に配置する。
 #
-# 流れ: 対象 Debug/Examples（cslib を lake-manifest.json で rev 固定）を Commands/Scripts/l4sb.sh で
-#   init → report（対象ビルド → 解析器ビルド → decl_report）→ check → web（埋め込み）
-# と回し、ldr_check と ldr_render_check を **両方** 通過した場合だけ Graph/Web を配置する。
-# 検査に落ちたレポートは公開しない（黙って壊れたページを出さない）。
+# 手元で検証してきた三つのコマンドをそのまま回す（新しい段取りは持ち込まない）:
+#   make all TARGET=Debug/Examples                                   … フィクスチャの解析
+#   node Graph/make_sample.js                                        … ビューアの代替データ js/sample.js
+#   make all TARGET=Debug/Examples MODULES="Cslib.Crypto.Protocols.Commitment Cslib.Crypto.Protocols.SecretSharing" ARGS="--import-all"
+# それぞれ init → report → check → web を含む（Commands/Scripts/l4sb.sh）。ldr_check と、最後の
+# ldr_render_check を通過した場合だけ Graph/Web を配置する（検査に落ちたレポートは公開しない）。
 #
-# 時間: 初回は Mathlib のビルド済み成果物の取得（lake exe cache get）と cslib のビルドで数十分。
-# 二回目以降は .lake / .l4sb / ~/.elan のキャッシュで短くなる。--fetch-cache は毎回付ける
-# （取得済みなら差分だけで安価。キャッシュが部分的に復元された状態で Mathlib をソースから
-# ビルドし始めることが無い）。
+# CI 固有に足すもの:
+#   - elan / node / 空き容量の確保。
+#   - cslib にはビルド済み成果物の配信が無い（Mathlib の `lake exe cache` に相当するものは無く、
+#     Reservoir の表示も互換性だけ）。Mathlib は cache get で取り、cslib はここで一度ビルドして
+#     actions/cache に保存する。actions/cache はジョブ成功時しか保存しないので restore / save を分け、
+#     save は `if: always()` で失敗時も途中成果を残す（初回が落ちると毎回最初からになる。実測）。
+#   - 公開リポジトリの runner は 4 コア・7 GB。lake の並列数を 2 に抑える（L4SB_LAKE_JOBS）。
+#   - MODULES をジョブの環境変数に置かない。Makefile の `MODULES ?=` が拾い、フィクスチャの段まで
+#     cslib を解析しに行く（実測）。コマンド行でだけ渡す。
+#   - --fetch-cache を付ける。キャッシュの復元が古い manifest のもの（restore-keys）でも、Mathlib を
+#     ソースからビルドし始めない（取得済みなら差分だけで安価）。
 name: pages
 
 on:
@@ -33,12 +42,13 @@ concurrency:
 
 env:
   TARGET: Debug/Examples
-  MODULES: Cslib.Crypto.Protocols.Commitment Cslib.Crypto.Protocols.SecretSharing
+  L4SB_LAKE_JOBS: "2"
+  CACHE_KEY: l4sb-v2-${{ hashFiles('Debug/Examples/lake-manifest.json', 'Debug/Examples/lean-toolchain') }}
 
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 170
     steps:
       - uses: actions/checkout@v4
 
@@ -46,7 +56,9 @@ jobs:
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
-          df -h /
+          df -h / | tail -n 1
+          free -h | head -n 2
+          nproc
 
       - uses: actions/setup-node@v4
         with:
@@ -58,17 +70,18 @@ jobs:
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
       # 鍵は対象の manifest と toolchain。解析器のソースは鍵に入れない（衛星の stamp がソースの
-      # 変更を検出して再複写・再ビルドする）。restore-keys で古いキャッシュからの差分更新を許す
-      - name: Cache Lean toolchain, packages and builds
-        uses: actions/cache@v4
+      # 変更を検出して再複写・再ビルドする）。保存は末尾の cache/save（失敗時も残す）
+      - name: Restore Lean toolchain, packages and builds
+        id: restore
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.elan
             ${{ env.TARGET }}/.lake
             ${{ env.TARGET }}/.l4sb
-          key: l4sb-${{ runner.os }}-${{ hashFiles('Debug/Examples/lake-manifest.json', 'Debug/Examples/lean-toolchain') }}
+          key: ${{ env.CACHE_KEY }}
           restore-keys: |
-            l4sb-${{ runner.os }}-
+            l4sb-v2-
 
       - name: Lean toolchain of the target
         run: |
@@ -77,39 +90,21 @@ jobs:
           lake --version
           df -h / | tail -n 1
 
-      # 段を分けて、どこで止まったかが一覧で読めるようにする（一段にまとめると 8 分の段の中で
-      # 何が失敗したか分からない。実測）。
-      - name: Satellite workspace (lake update)
+      # 1. フィクスチャの解析（init → 対象ビルド → 解析器ビルド → decl_report → check → web）
+      - name: make all TARGET=Debug/Examples
         run: |
-          Commands/Scripts/l4sb.sh init "$TARGET"
+          make all TARGET="$TARGET" ARGS="--fetch-cache"
           df -h / | tail -n 1
 
-      # Mathlib のビルド済み成果物。l4sb.sh report も取得するが、ここで明示的に行い、失敗を単独の段で見せる
-      - name: Fetch Mathlib build cache (lake exe cache get)
+      # 2. ビューアの代替データ（生成物。Graph/.gitignore）
+      - name: node Graph/make_sample.js
+        run: node Graph/make_sample.js
+
+      # 3. お題の解析。埋め込み（Graph/Web/js/default-report.js）をこれで上書きする
+      - name: make all … MODULES="Cslib.Crypto.Protocols.Commitment Cslib.Crypto.Protocols.SecretSharing" ARGS="--import-all"
         run: |
-          cd "$TARGET"
-          lake exe cache get
+          make all TARGET="$TARGET" MODULES="Cslib.Crypto.Protocols.Commitment Cslib.Crypto.Protocols.SecretSharing" ARGS="--import-all --fetch-cache"
           df -h / | tail -n 1
-
-      # ビューアの代替データ js/sample.js は生成物（Graph/.gitignore）。フィクスチャ Examples を先に
-      # 解析して作る。その後に本題の cslib を解析し、埋め込みを上書きする
-      - name: Analyze the fixture (Examples) and regenerate js/sample.js
-        run: |
-          Commands/Scripts/l4sb.sh report "$TARGET" Examples --fetch-cache
-          Commands/Scripts/l4sb.sh check "$TARGET"
-          node Graph/make_sample.js
-          df -h / | tail -n 1
-
-      - name: Analyze cslib (Commitment / SecretSharing)
-        run: |
-          Commands/Scripts/l4sb.sh report "$TARGET" $MODULES --import-all --fetch-cache
-          df -h / | tail -n 1
-
-      - name: Invariant check (ldr_check)
-        run: Commands/Scripts/l4sb.sh check "$TARGET"
-
-      - name: Embed into the viewer (web)
-        run: Commands/Scripts/l4sb.sh web "$TARGET"
 
       - name: Render smoke test (DOM stand-in)
         run: node Graph/ldr_render_check.js Graph/report.jsonl
@@ -128,6 +123,18 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
+
+      # 失敗しても途中成果（toolchain・packages・Mathlib の oleans・cslib のビルド）を残す。
+      # 同じ鍵が既に在れば保存は飛ばされる
+      - name: Save Lean toolchain, packages and builds
+        if: always() && steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.elan
+            ${{ env.TARGET }}/.lake
+            ${{ env.TARGET }}/.l4sb
+          key: ${{ env.CACHE_KEY }}
 
   deploy:
     needs: analyze
