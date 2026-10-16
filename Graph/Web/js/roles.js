@@ -32,7 +32,12 @@
     "Eq", "Eq.refl", "Eq.symm", "Eq.trans", "Eq.mp", "Eq.mpr", "Eq.subst", "Eq.ndrec",
     "HEq", "HEq.refl",
     "True", "True.intro", "False", "False.elim", "Not",
-    "id", "congrArg", "congrFun", "cast", "rfl", "trivial", "absurd",
+    "id", "congrArg", "congrFun", "congrFun'", "congr", "cast", "rfl", "trivial", "absurd",
+    /* simp が置く書き換えの補助。`of_eq_true` / `eq_self` / `eq_true` / `eq_false` は `Eq.rec` と propext
+       だけで閉じ、数学的な前提ではない。畳むと、その中の propext が ★ の前提として直接現れる
+       （simp が公理を持ち込んだ事実は隠れない）。 */
+    "of_eq_true", "of_eq_false", "eq_self", "eq_true", "eq_false", "ne_eq", "iff_self", "implies_true",
+    "true_and", "and_true", "true_or", "or_true", "and_self", "or_self", "not_false_eq_true", "iff_true", "true_iff",
     "Prod", "Prod.mk", "Prod.fst", "Prod.snd",
     "PProd", "PProd.mk", "PProd.fst", "PProd.snd",
     "Sigma", "Sigma.mk", "Sigma.fst", "Sigma.snd",
@@ -50,23 +55,34 @@
 
   /**
    * 役割を返す。node は store の nodes の要素（無くても名前だけで判定する）。
-   *   "axiom" | "lemma" | "vocab" | "frame" | "part"
+   *   "axiom" | "lemma" | "vocab" | "plumbing" | "unknown" | "frame" | "part"
+   *
+   * plumbing  型クラスの配管（射影 `X.toY`・インスタンス・構成子 `mk`）。命題でも（Prop 値クラスの親射影
+   *           `RingHomClass.toAddMonoidHomClass`、インスタンス `RingHom.instRingHomClass`）数学的な前提では
+   *           ないので、導出図の前提に並べない（cslib の定理で前提 12 件のうち 2 件が配管だった。実測）。
+   * unknown   範囲外のスタブ。種別も isProp も分からないので、語彙（定義）とは言えない。導出図では
+   *           「前提は範囲外」と正直に書く（以前は語彙に落ち、`map_multiset_sum`（定理）が語彙に混じって
+   *           「前提なし」と出ていた。実測）。
    */
   function roleOf(name, node) {
     const nd = node || {};
     if (nd.kind === "axiom") return "axiom";          // 公理は決して畳まない
     if (isFrameName(name)) return "frame";
     if (nd.originRel === "part" && nd.origin) return "part";
+    if (nd.stub) return "unknown";
+    if (isPlumbing(name, nd)) return "plumbing";
     if (nd.isProp) return "lemma";
     return "vocab";
   }
 
   const ROLE = {
-    axiom: { ja: "公理",  c: "#EA580C", note: "これ以上遡れない仮定" },
-    lemma: { ja: "補題",  c: "#4F46E5", note: "既に証明された言明。導出の前提" },
-    vocab: { ja: "語彙",  c: "#0D9488", note: "主張を書くための定義・型" },
-    frame: { ja: "骨組み", c: "#A8A29E", note: "論理結合子（And.intro / Eq.mpr …）" },
-    part:  { ja: "断片",  c: "#A8A29E", note: "ある宣言の証明・本体から切り出された一部（_proof_<i> / match_<i>）" },
+    axiom:    { ja: "公理",  c: "#EA580C", note: "これ以上遡れない仮定" },
+    lemma:    { ja: "補題",  c: "#4F46E5", note: "既に証明された言明。導出の前提" },
+    vocab:    { ja: "語彙",  c: "#0D9488", note: "主張を書くための定義・型（概念）" },
+    plumbing: { ja: "配管",  c: "#78716C", note: "型クラスの配管（射影・インスタンス・構成子）。前提ではない" },
+    unknown:  { ja: "範囲外", c: "#A8A29E", note: "レポートの範囲外で種別が分からない" },
+    frame:    { ja: "骨組み", c: "#A8A29E", note: "論理結合子（And.intro / Eq.mpr …）と simp の補助" },
+    part:     { ja: "断片",  c: "#A8A29E", note: "ある宣言の証明・本体から切り出された一部（_proof_<i> / match_<i>）" },
   };
 
   /**
@@ -82,7 +98,7 @@
    */
   function split(name, nodes) {
     const nd = nodes[name];
-    const out = { axiom: [], lemma: [], vocab: [], frame: [], part: [] };
+    const out = { axiom: [], lemma: [], vocab: [], plumbing: [], unknown: [], frame: [], part: [] };
     if (!nd) return out;
     const seen = new Set([name]);
     const visit = (d, via, direct) => {
@@ -105,9 +121,10 @@
     return out;
   }
 
-  /* ---- 基盤の分類 ----
+  /* ---- 配管の判定 ----
      型クラスの配管（構造体の射影 `X.toY`・インスタンス・構成子 `mk`）は数が多く、補題・定義の行を
-     埋める。レポートの境界とビューアの基盤で同じ判定を使う（二か所で別々に組むと必ず乖離する）。 */
+     埋める。役割（roleOf）・レポートの境界・ビューアの基盤で同じ判定を使う（二か所で別々に組むと必ず乖離する）。
+     関数宣言なので roleOf より後に書いてあっても巻き上げで使える。 */
   function isPlumbing(name, node) {
     const nd = node || {};
     const u = LDR.sig ? LDR.sig.userName(name) : String(name);

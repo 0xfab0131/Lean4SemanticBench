@@ -75,17 +75,41 @@ jobs:
           cd "$TARGET"
           lean --version
           lake --version
+          df -h / | tail -n 1
+
+      # 段を分けて、どこで止まったかが一覧で読めるようにする（一段にまとめると 8 分の段の中で
+      # 何が失敗したか分からない。実測）。
+      - name: Satellite workspace (lake update)
+        run: |
+          Commands/Scripts/l4sb.sh init "$TARGET"
+          df -h / | tail -n 1
+
+      # Mathlib のビルド済み成果物。l4sb.sh report も取得するが、ここで明示的に行い、失敗を単独の段で見せる
+      - name: Fetch Mathlib build cache (lake exe cache get)
+        run: |
+          cd "$TARGET"
+          lake exe cache get
+          df -h / | tail -n 1
 
       # ビューアの代替データ js/sample.js は生成物（Graph/.gitignore）。フィクスチャ Examples を先に
-      # 解析して作る（cslib のビルド後なので数分）。その後に本題の cslib を解析し、埋め込みを上書きする
-      - name: Analyze the fixture and regenerate js/sample.js
+      # 解析して作る。その後に本題の cslib を解析し、埋め込みを上書きする
+      - name: Analyze the fixture (Examples) and regenerate js/sample.js
         run: |
-          make all TARGET="$TARGET" ARGS="--fetch-cache"
+          Commands/Scripts/l4sb.sh report "$TARGET" Examples --fetch-cache
+          Commands/Scripts/l4sb.sh check "$TARGET"
           node Graph/make_sample.js
+          df -h / | tail -n 1
 
-      - name: Analyze cslib (init → report → check → web)
+      - name: Analyze cslib (Commitment / SecretSharing)
         run: |
-          make all TARGET="$TARGET" MODULES="$MODULES" ARGS="--import-all --fetch-cache"
+          Commands/Scripts/l4sb.sh report "$TARGET" $MODULES --import-all --fetch-cache
+          df -h / | tail -n 1
+
+      - name: Invariant check (ldr_check)
+        run: Commands/Scripts/l4sb.sh check "$TARGET"
+
+      - name: Embed into the viewer (web)
+        run: Commands/Scripts/l4sb.sh web "$TARGET"
 
       - name: Render smoke test (DOM stand-in)
         run: node Graph/ldr_render_check.js Graph/report.jsonl
