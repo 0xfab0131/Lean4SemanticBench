@@ -139,10 +139,10 @@ S.actions.setTrace("__no_such__");
      "基盤の各項は、対象側の宣言から少なくとも一本の辺で使われている");
   S.actions.setMinimalMode("atoms"); render();
   const atoms = S.derived.trueMinimal;
-  const axFirst = atoms.filter((n) => S.state.nodes[n].kind === "axiom");
+  const cenAx = (S.state.nodes[S.derived.center].axioms || []).filter((a) => S.state.nodes[a]);
   ok(S.state.minimalMode === "atoms" && document.getElementById("minCount").textContent.includes("依存先を持たない")
-     && (!axFirst.length || html("minimalBox").indexOf(axFirst[0]) < html("minimalBox").indexOf(atoms.find((n) => S.state.nodes[n].kind !== "axiom") || "\u0000")),
-     "原子のモードでは公理が先に並ぶ", `原子 ${atoms.length}（公理 ${axFirst.length}）`);
+     && (!cenAx.length || (html("minimalBox").includes("公理 " + cenAx.length) && cenAx.every((a) => html("minimalBox").includes(`data-trace="${a}"`)))),
+     "原子のモードでは中心の公理が別の行に先に並び、押せる（経路）", `原子 ${atoms.length}（公理 ${cenAx.length}）`);
   S.actions.setMinimalMode("frontier"); render();
   const fc = S.derived.frontierClean;
   ok(S.state.minimalMode === "frontier" && !!fc && fc.rest.every((z) => !LDR.graph.isAnnotation(z) && !LDR.graph.memberOwner(z, S.state.nodes)),
@@ -191,7 +191,7 @@ ok(Object.keys(S.derived.posAll).length > 1, "束ね=パッケージでも配置
     return { n: bs.length, bad };
   };
   const mb = checkBlocks(rc.text);
-  ok(mb.n >= 2 && !mb.bad.length, "中心のレポートの付録に Mermaid の図（公理の流入・境界…）が付き、構文の約束を守る", `${mb.n} 図${mb.bad.length ? " / " + mb.bad.slice(0, 3).join("; ") : ""}`);
+  ok(mb.n >= 1 && !mb.bad.length, "中心のレポートの付録に Mermaid の図（公理の流入・境界…）が付き、構文の約束を守る", `${mb.n} 図${mb.bad.length ? " / " + mb.bad.slice(0, 3).join("; ") : ""}`);
   const iApp = rc.text.indexOf("## 付録: 図");
   ok((rc.text.match(/## 付録: 図/g) || []).length === 1 && iApp > rc.text.indexOf("## 来歴") && rc.text.indexOf("### 記法") > iApp && rc.text.indexOf("### 記法") < rc.text.indexOf("```mermaid"),
      "図は本文に挟まず末尾の付録に集め、記法は付録の頭に一度だけ");

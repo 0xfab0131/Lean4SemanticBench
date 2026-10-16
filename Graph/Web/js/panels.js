@@ -1033,17 +1033,25 @@
         ? `<button data-deriv="${esc(vk)}" class="hover:underline" style="color:${LDR.roles.ROLE.vocab.c}" title="主張を書くための定義・型（前提ではない）。押すと${vopen ? "畳む" : "開く"}">語彙 ${parts.vocab.length} ${vopen ? "▾" : "▸"}</button>${vopen ? " " + chips : ""}`
         : `<span style="color:${LDR.roles.ROLE.vocab.c}" title="主張を書くための定義・型（前提ではない）">語彙 ${parts.vocab.length}</span> ${chips}`);
     }
+    if (parts.plumbing && parts.plumbing.length) foot.push(`<span class="text-stone-400" title="${esc(parts.plumbing.map((v) => v.name).join(", "))}（型クラスの配管: 射影・インスタンス・構成子。前提ではない）">配管 ${parts.plumbing.length}</span>`);
+    if (parts.unknown && parts.unknown.length && premises.length) foot.push(`<span class="text-stone-400" title="${esc(parts.unknown.map((v) => v.name).join(", "))}（レポートの範囲外で種別が分からない）">範囲外 ${parts.unknown.length}</span>`);
     if (parts.frame.length) foot.push(`<span class="text-stone-400" title="${esc(parts.frame.map((v) => v.name).join(", "))}">骨組み ${parts.frame.length}</span>`);
     if (parts.part && parts.part.length) foot.push(`<span class="text-stone-400" title="${esc(parts.part.map((v) => v.name).join(", "))}（証明・本体の切り出し。中身は前提として上に展開済み）">断片 ${parts.part.length}</span>`);
     const footHtml = foot.length ? `<div class="mt-1.5 text-[9px] leading-relaxed" style="word-spacing:2px">${foot.join(" · ")}</div>` : "";
     const concl = `<div class="fig-concl" title="${esc(nd.conclusion || nd.typeString || "")}">⊢ ${esc(conclusionOf(nd)) || "—"}</div>`;
 
-    /* 前提が無い（定義そのもの、または骨組みだけで閉じている）なら、図は結論一行。
-       空の前提欄と横線を出すと、何も無いのに六行使う（実測）。 */
+    /* 前提が無いなら、図は結論一行（空の前提欄と横線を出すと、何も無いのに六行使う。実測）。
+       範囲外の依存（種別不明）があれば「前提なし」とは言わず、そう書く。証明が反射律だけなら定義的等式。 */
     if (!premises.length) {
+      const REFL = new Set(["rfl", "Iff.rfl", "Eq.refl", "HEq.refl", "Iff.refl", "id", "trivial", "True.intro"]);
+      const definitional = nd.isProp && (nd.valueDeps || []).every((d) => REFL.has(d) || LDR.roles.isFrameName(d) || ((st.nodes[d] || {}).originRel === "part"));
+      const why = parts.unknown && parts.unknown.length
+        ? `前提は範囲外 ${parts.unknown.length} 件（${esc(parts.unknown.map((v) => shortOf(v.name)).join(", "))}）— レポートの範囲外で種別が分からない`
+        : definitional ? "定義的等式 — 証明は反射律だけ。両辺は主張の語彙の定義を展開すると一致する（確認すべき内容はその定義にある）"
+        : "前提なし — 論理の骨組みだけで閉じている";
       return `<div>
         ${concl}
-        <div class="mt-1 text-[9.5px] text-stone-400">前提なし — 定義そのもの、または論理の骨組みだけで閉じている</div>
+        <div class="mt-1 text-[9.5px] text-stone-400">${why}</div>
         ${footHtml}
       </div>`;
     }
@@ -1166,7 +1174,7 @@
         <details data-keep="deriv" class="sec"${open("deriv")}>
           <summary title="推論図: 前提は横線の上、結論は下。▸ で前提の導出を開く。公理は ★、前提は原始的なものから順">
             <span>導出図</span>
-            <span class="text-stone-400">前提 ${nPrem}（公理 ${parts.axiom.length} · 補題 ${parts.lemma.length}）· 語彙 ${parts.vocab.length}${parts.frame.length ? ` · 骨組み ${parts.frame.length}` : ""}${parts.part && parts.part.length ? ` · 断片 ${parts.part.length}` : ""}</span>
+            <span class="text-stone-400">前提 ${nPrem}（公理 ${parts.axiom.length} · 補題 ${parts.lemma.length}）· 語彙 ${parts.vocab.length}${parts.plumbing.length ? ` · 配管 ${parts.plumbing.length}` : ""}${parts.unknown.length ? ` · 範囲外 ${parts.unknown.length}` : ""}${parts.frame.length ? ` · 骨組み ${parts.frame.length}` : ""}${parts.part && parts.part.length ? ` · 断片 ${parts.part.length}` : ""}</span>
           </summary>
           <div class="px-2 pb-2 pt-1 border-t border-stone-200 dark:border-stone-700">${derivation(name, st, 3, seen)}</div>
         </details>
@@ -1453,11 +1461,17 @@
         </div>`;
       let body = "";
       if (mode === "atoms") {
-        // 公理を先に、残りは名前順（公理は橙の札）
-        const list = tm.slice().sort((a, b) => (((st.nodes[b] || {}).kind === "axiom") - ((st.nodes[a] || {}).kind === "axiom")) || (a < b ? -1 : 1));
-        body = `<div class="flex flex-wrap gap-1">${list.length
-          ? list.map((n) => chip(n, `${n}（${kinfo((st.nodes[n] || {}).kind).ja}）`)).join("")
-          : '<span class="text-[12px] text-stone-400">依存先がありません（この宣言自身が原始的）</span>'}</div>`;
+        /* 中心が持つ公理を先に（橙の札。レポートに kind = axiom の宣言として在れば経路も引ける）。
+           公理は依存順序の上では原子ではない（型が Eq・Iff を参照する）ので、min(↓x) とは別の行に置く。 */
+        const cen = st.nodes[dv.center] || {};
+        const axs = (cen.axioms || []).filter((a) => st.nodes[a]);
+        const list = tm.slice().sort();
+        body = (axs.length ? `<div class="flex items-start gap-2 mb-1"><span class="text-[10px] text-stone-500 shrink-0 w-14 pt-0.5" title="これ以上遡れない仮定。型が Eq・Iff を参照するので依存順序の原子ではない">公理 ${axs.length}</span>
+            <div class="flex flex-wrap gap-1 min-w-0">${axs.map((a) => chip(a, `${a}（公理）`)).join("")}</div></div>` : "")
+          + `<div class="flex items-start gap-2"><span class="text-[10px] text-stone-500 shrink-0 w-14 pt-0.5" title="依存先を持たない宣言（語彙の原子）">原子 ${list.length}</span>
+            <div class="flex flex-wrap gap-1 min-w-0">${list.length
+              ? list.map((n) => chip(n, `${n}（${kinfo((st.nodes[n] || {}).kind).ja}）`)).join("")
+              : '<span class="text-[12px] text-stone-400">依存先がありません（この宣言自身が原始的）</span>'}</div></div>`;
       } else if (mode === "frontier") {
         const memberLine = memberCount
           ? `<div class="text-[10px] text-stone-500 mb-1" title="${esc([...fc.members.entries()].map(([o, ls]) => `${o}: ${ls.join(", ")}`).join("\n"))}">既知の構造体の成員（射影・構成子）${memberCount} 件は構造体に畳む: ${esc([...fc.members.keys()].map(shortOf).join(", "))}</div>` : "";

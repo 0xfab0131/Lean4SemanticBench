@@ -693,12 +693,16 @@ console.log("\n=== 基盤 ∂_T x と境界の清掃 ===");
   ok(!!fc && fc.rest.every((z) => !LDR.graph.isAnnotation(z) && !LDR.graph.memberOwner(z, nodes)), "清掃後の境界に注釈と既知の構造体の成員が残らない",
      fc ? `${fc.rest.length} 件（成員 ${[...fc.members.values()].reduce((a, b) => a + b.length, 0)} / 注釈 ${fc.annotations.length}）` : "");
   ok(!!fc && fc.rest.length + fc.annotations.length + [...fc.members.values()].reduce((a, b) => a + b.length, 0) === dv.frontier.length, "清掃は境界の分割である（件数が合う）");
-  const axInAtoms = dv.trueMinimal.filter((n) => nodes[n].kind === "axiom");
+  /* 公理は kind = axiom の宣言として ↓x に在る（範囲外のスタブではない）。構造的な極小元ではない点に注意:
+     `propext : (a ↔ b) → a = b` の型は Iff と Eq を参照するので、依存順序の上では原子ではない。
+     「原子」の節には公理を別の行で添える（graph の min(↓x) には混ぜない）。 */
   const axUsed = new Set(nodes[dv.center].axioms || []);
   if (axUsed.size && Object.values(nodes).some((n) => n.kind === "axiom")) {
-    ok([...axUsed].every((a) => axInAtoms.includes(a)), "中心が持つ公理は原子（真の極小元）に公理として並ぶ", [...axUsed].join(", "));
+    const downC = LDR.graph.reachable(dv.center, dv.inlinedIdx.dep, 64);
+    ok([...axUsed].every((a) => nodes[a] && nodes[a].kind === "axiom" && !nodes[a].stub && (a in downC)),
+       "中心が持つ公理は kind = axiom の宣言として ↓x に在る（範囲外のスタブではない）", [...axUsed].join(", "));
   } else {
-    skip("中心が持つ公理は原子に並ぶ", "公理の宣言を持たない形式のレポート（旧い解析器）か、公理非依存の中心");
+    skip("中心が持つ公理は宣言として ↓x に在る", "公理の宣言を持たない形式のレポート（旧い解析器）か、公理非依存の中心");
   }
 }
 

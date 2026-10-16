@@ -43,7 +43,6 @@ concurrency:
 env:
   TARGET: Debug/Examples
   L4SB_LAKE_JOBS: "2"
-  CACHE_KEY: l4sb-v2-${{ hashFiles('Debug/Examples/lake-manifest.json', 'Debug/Examples/lean-toolchain') }}
 
 jobs:
   analyze:
@@ -69,8 +68,9 @@ jobs:
           curl -sSfL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
-      # 鍵は対象の manifest と toolchain。解析器のソースは鍵に入れない（衛星の stamp がソースの
-      # 変更を検出して再複写・再ビルドする）。保存は末尾の cache/save（失敗時も残す）
+      # 鍵は対象の manifest と toolchain（hashFiles は step の中でしか使えない。ジョブの env に置いて
+      # 「Unrecognized function」で止まった。実測）。解析器のソースは鍵に入れない（衛星の stamp が
+      # ソースの変更を検出して再複写・再ビルドする）。保存は末尾の cache/save（失敗時も残す）
       - name: Restore Lean toolchain, packages and builds
         id: restore
         uses: actions/cache/restore@v4
@@ -79,7 +79,7 @@ jobs:
             ~/.elan
             ${{ env.TARGET }}/.lake
             ${{ env.TARGET }}/.l4sb
-          key: ${{ env.CACHE_KEY }}
+          key: l4sb-v2-${{ hashFiles('Debug/Examples/lake-manifest.json', 'Debug/Examples/lean-toolchain') }}
           restore-keys: |
             l4sb-v2-
 
@@ -134,7 +134,7 @@ jobs:
             ~/.elan
             ${{ env.TARGET }}/.lake
             ${{ env.TARGET }}/.l4sb
-          key: ${{ env.CACHE_KEY }}
+          key: ${{ steps.restore.outputs.cache-primary-key }}
 
   deploy:
     needs: analyze
