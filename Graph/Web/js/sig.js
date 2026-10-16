@@ -112,9 +112,13 @@
     const p = m.split(".");
     return p.length <= 2 ? m : p.slice(-2).join(".");
   });
+  /* private 宣言の名前は `_private.<Module>.0.<Decl>`。表示は利用者名 `<Decl>` で行う
+     （鍵・索引は実名のまま。実名でなければ依存の辺と一致しない）。 */
+  const userName = (n) => String(n || "").replace(/^_private\.(?:[^.]+\.)*?0\./, "");
+  const isPrivateName = (n) => /^_private\./.test(String(n || ""));
   const shortName = (n) => {
-    const p = String(n || "").split(".");
-    return p.length <= 2 ? String(n || "") : p.slice(-2).join(".");
+    const p = userName(n).split(".");
+    return p.length <= 2 ? userName(n) : p.slice(-2).join(".");
   };
 
   /** 主張の形につける短い日本語。Lean 側 `relShape` の値に対応する。 */
@@ -162,5 +166,5 @@
     part:   { ja: "断片", note: "由来の証明・本体の一部" },
   };
 
-  LDR.sig = { decompose, abbrev, shortName, splitTopSpaces, findTop, strip, SHAPE, ORIGIN_KIND, ORIGIN_REL };
+  LDR.sig = { decompose, abbrev, shortName, userName, isPrivateName, splitTopSpaces, findTop, strip, SHAPE, ORIGIN_KIND, ORIGIN_REL };
 })(window.LDR = window.LDR || {});

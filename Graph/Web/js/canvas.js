@@ -504,14 +504,19 @@
       if (vias.length) lines.push({ t: "経由 " + [...new Set(vias)].slice(0, 4).join(", ") + (vias.length > 4 ? " …" : ""), s: 11, col: c.faint });
 
       const concl = S2.abbrev(nd.conclusion || nd.typeString || "");
-      const w = 430, padX = 11, padY = 9;
+      /* カードはキャンバスの中に収める。幅はキャンバス幅に合わせて縮め、位置は指の右下を基本に、
+         右・下に入らなければ左・上へ、それでも入らなければ端に寄せる（以前は左へ返すだけで、
+         キャンバスの中央付近では左端からはみ出し、下端付近では下にはみ出した。実測）。 */
+      const w = Math.min(430, W - 16), padX = 11, padY = 9;
       pp.textSize(11.5);
       const wrapH = concl ? Math.min(58, Math.ceil(pp.textWidth(concl) / (w - padX * 2)) * 15 + 4) : 0;
       const h = padY * 2 + lines.length * 17 + (wrapH ? wrapH + 6 : 0);
 
       let x = pp.mouseX + 18, y = pp.mouseY + 18;
       if (x + w > W - 8) x = pp.mouseX - w - 18;
-      if (y + h > H - 8) y = Math.max(8, pp.mouseY - h - 18);
+      if (y + h > H - 8) y = pp.mouseY - h - 18;
+      x = Math.max(8, Math.min(x, W - w - 8));
+      y = Math.max(8, Math.min(y, H - h - 8));
 
       pp.noStroke(); pp.fill(c.panel);
       pp.rect(x, y, w, h, 10);

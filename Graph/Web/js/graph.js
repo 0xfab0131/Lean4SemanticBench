@@ -16,6 +16,8 @@
      持つ（Basic.lean `originOf`）。欄の無い旧形式だけ、名前の形から推定する。
      名前による推定はここに閉じ込め、他の場所では欄だけを見る。 */
   function legacyOrigin(name) {
+    // private 名（`_private.<Module>.0.<Decl>…`）は接頭辞を外して利用者名で見る
+    name = String(name).replace(/^_private\.(?:[^.]+\.)*?0\./, "");
     const i = name.lastIndexOf(".");
     if (i < 0) return null;
     const p = name.slice(0, i), s = name.slice(i + 1);
@@ -108,6 +110,7 @@
     }
     // レポートに含まれない参照先を外部ノードとして補う。
     // 最小の仮定はほぼこちら側に現れるので必須。
+    const stubs = [];
     for (const info of Object.values({ ...nodes })) {
       for (const dep of [...info.typeDeps, ...info.valueDeps]) {
         if (!nodes[dep]) {
@@ -122,8 +125,17 @@
             typeSize: 0, valueSize: 0, external: true, internal: false,
             origin: "", originKind: "", originRel: "",
           };
+          stubs.push(dep);
         }
       }
+    }
+    /* スタブ（外部の宣言の依存先。レポートは外部を一段しか持たない）のうち、名前から派生・断片と
+       分かり由来がレポートに在るもの（`PMF.pure._proof_1` → `PMF.pure`）は由来を付ける。
+       付けないと `_proof_1` が節点として図に残り、極小元にも並ぶ（cslib で実測）。スタブは
+       依存を持たない葉なので、由来に畳んでも情報は失われない。 */
+    for (const n of stubs) {
+      const l = legacyOrigin(n);
+      if (l && nodes[l.origin]) Object.assign(nodes[n], l);
     }
     return { nodes, errors, order };
   }

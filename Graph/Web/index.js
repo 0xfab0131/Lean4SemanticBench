@@ -33,10 +33,19 @@
       "[data-nav],[data-sel],[data-trace],[data-tab],[data-kind],[data-edge],[data-gran]," +
       "[data-ref],[data-list],[data-filter],[data-tree],[data-hist],[data-pin],[data-unpin]," +
       "[data-group],[data-density],[data-preview],[data-follow],[data-deriv],[data-cluster]," +
-      "[data-pback],[data-pfwd]");
+      "[data-pback],[data-pfwd],[data-hl]");
     if (!t) return;
     if (t.dataset.pback !== undefined) { S.actions.previewBack(); return; }
     if (t.dataset.pfwd !== undefined) { S.actions.previewForward(); return; }
+    // 単クリック = グラフで経路を強調（プレビューは動かさない）、素早い 2 回目 = 中心にする
+    if (t.dataset.hl !== undefined) {
+      const n = t.dataset.hl, now = Date.now();
+      if (onClick._last === n && now - (onClick._t || 0) < 380) { S.actions.navigate(n); onClick._last = null; }
+      else { S.actions.highlight(n); onClick._last = n; onClick._t = now; }
+      return;
+    }
+    // 導出図の前提の名前（data-deriv を持つ行）は、その場で開閉する。↗（data-sel）は closest で先に取れる
+    if (t.dataset.deriv !== undefined && t.dataset.sel === undefined) { S.actions.toggleDeriv(t.dataset.deriv); return; }
     if (t.dataset.cluster !== undefined) {
       const r = S.actions.toggleCluster(t.dataset.cluster);
       if (r && !r.ok && r.msg) toast(r.msg);      // 固定で開いている由来は閉じない。理由を伝える

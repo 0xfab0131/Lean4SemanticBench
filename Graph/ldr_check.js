@@ -526,6 +526,14 @@ console.log("\n=== 由来（成員・派生・断片）===");
     ok(fakeEdge === 0, "畳んだグラフの辺は、元の辺・経由付きの辺・自分の断片を埋め戻した辺のいずれか", `根拠の無い辺 ${fakeEdge}`);
     ok(Object.keys(effClosedDep).every((n) => !isFacet(n)), "閉じた派生は節点として現れない");
 
+    /* スタブ（レポートに無い参照先の補完）のうち名前から断片・派生と分かるもの（`PMF.pure._proof_1`）は、
+       由来がレポートに在れば畳まれて節点にならない（極小元にも並ばない）。 */
+    const stubParts = Object.values(nodes).filter((n) => n.external && n.module === "(範囲外)" && G.legacyOrigin(n.name) && nodes[G.legacyOrigin(n.name).origin]);
+    const unfolded = stubParts.filter((n) => !n.originRel);
+    ok(unfolded.length === 0, "由来が在るスタブの断片・派生は由来に畳まれる（節点に残らない）",
+       `スタブ ${stubParts.length} 件 / 畳まれていない ${unfolded.length}`);
+    ok(stubParts.every((n) => !(n.name in effClosedDep)), "畳まれたスタブは有効グラフに現れない");
+
     // 件数の整合
     const facetTotal = Object.values(S.derived.facetCount || {}).reduce((a, b) => a + b, 0);
     const facetNodes = Object.keys(nodes).filter(isFacet).length;

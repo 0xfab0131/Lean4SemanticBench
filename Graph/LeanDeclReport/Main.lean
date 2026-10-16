@@ -106,9 +106,10 @@ def declReportToJsonLine (r : DeclReport) (scope : String := "target") : String 
 
 /-- `targets` のいずれかを接頭辞に持つモジュールで定義された宣言だけを残す。
     内部宣言の判定は core の `Name.isInternalDetail` を使う
-    （Lean 4.10.0 の #4454 で公開された。名前の構成要素が `_` 始まりか数値かを見る）。 -/
+    （Lean 4.10.0 の #4454 で公開された。名前の構成要素が `_` 始まりか数値かを見る）。
+    private 宣言は接頭辞を外した利用者名で判定する（`isInternalName`。対象に含める）。 -/
 def isTargetDecl (env : Environment) (targets : Array Name) (n : Name) : Bool :=
-  if n.isInternalDetail then false
+  if isInternalName n then false
   else
     let m := moduleOf env n
     targets.any fun t => t.isPrefixOf m

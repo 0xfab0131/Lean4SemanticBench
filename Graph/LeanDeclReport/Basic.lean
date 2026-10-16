@@ -475,12 +475,26 @@ private partial def nearestIndOrCtor (env : Environment) (n : Name) : Option Nam
     | some (.ctorInfo _)   => some p
     | _                    => nearestIndOrCtor env p
 
-/-- 最も近い接頭辞で、環境に存在し内部名でない宣言。断片（`foo._proof_1_1` → `foo`）の由来。 -/
+/-- 内部名か。private 宣言（`_private.<Module>.0.<Decl>`）は `_` 始まりの成分を持つが、利用者が
+    書いた宣言なので、private 接頭辞を外した利用者名で判定する（cslib の `private theorem` 8 件が
+    内部扱いで対象から外れていた。実測）。 -/
+def isInternalName (n : Name) : Bool :=
+  ((privateToUserName? n).getD n).isInternalDetail
+
+/-- 最も近い接頭辞で、環境に存在し内部名でない宣言。断片（`foo._proof_1_1` → `foo`）の由来。
+    補助定理は private 名（`_private.<Module>.0.<Decl>._proof_1`）で作られることがある
+    （cslib の `ofPure._proof_1` で実測）。接頭辞 `p` が private 名そのものなら（private 宣言の
+    断片）その名で、断片だけが private 名なら利用者名（`<Decl>`）で環境を引く。 -/
 private partial def nearestUserDecl (env : Environment) (n : Name) : Option Name :=
   match n with
   | .anonymous => none
   | .str p _ | .num p _ =>
-    if env.contains p && !p.isInternalDetail then some p else nearestUserDecl env p
+    let ok (c : Name) : Bool := env.contains c && !isInternalName c
+    if ok p then some p
+    else
+      match privateToUserName? p with
+      | some u => if ok u then some u else nearestUserDecl env p
+      | none   => nearestUserDecl env p
 
 /-- 宣言 `n` の由来。判定は具体的なものから順に、core の判定子で行う。 -/
 def originOf (n : Name) : MetaM OriginInfo := do
@@ -526,7 +540,7 @@ def originOf (n : Name) : MetaM OriginInfo := do
   if let .str _ s := n then
     if ["_proof", "proof_", "_sparseCasesOn", "_unary", "_mutual"].any (s.startsWith ·) then
       if let some o := nearestUserDecl env n then return mk o "proof" "part"
-  if n.isInternalDetail then
+  if isInternalName n then
     if let some o := nearestUserDecl env n then return mk o "internal" "part"
   return {}
 

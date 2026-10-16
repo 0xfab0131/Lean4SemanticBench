@@ -189,7 +189,7 @@
   /* 幅が足りないときは接頭辞を先に縮め（flex-shrink を大きく）、それでも足りなければ末尾も
      切り詰める。末尾を縮まない指定にすると、深い枝で名前が件数の上に重なる（実測）。 */
   const nameHtml = (shown) => {
-    const { prefix, last } = splitName(shown);
+    const { prefix, last } = splitName(LDR.sig.userName(shown));
     return `<span class="font-mono text-[11px] min-w-0 flex-1 flex items-baseline">
       ${prefix ? `<span class="truncate text-stone-400 dark:text-stone-500" style="flex-shrink:999">${esc(prefix)}.</span>` : ""}
       <span class="min-w-0 truncate" style="flex-shrink:1">${esc(last)}</span></span>`;
@@ -467,13 +467,13 @@
     })(root);
   }
 
-  /* 名前空間の成分列（名前から末尾一成分を落としたもの） */
-  const nsPath = (n) => String(n).split(".").slice(0, -1).map((seg) => ({ seg, kind: "ns" }));
+  /* 名前空間の成分列（利用者名から末尾一成分を落としたもの。private 名は接頭辞を外す） */
+  const nsPath = (n) => LDR.sig.userName(n).split(".").slice(0, -1).map((seg) => ({ seg, kind: "ns" }));
 
   /* 基準（枝の名前）と共通する先頭の成分を落とした相対名。末尾の成分は必ず残す
      （`A.B.C` を基準 `A.B.C` に対して出すなら `C`）。 */
   function relName(n, base) {
-    const a = String(n).split("."), b = String(base || "").split(".");
+    const a = LDR.sig.userName(n).split("."), b = String(base || "").split(".");
     let k = 0;
     while (k < a.length - 1 && k < b.length && a[k] === b[k]) k++;
     return a.slice(k).join(".");
@@ -519,7 +519,7 @@
        する判定（attachHeads）と相対名の表示に使う。 */
     const pathOf = (n) => {
       const mods = String(st.nodes[n].module).split(".");
-      const ns = String(n).split(".").slice(0, -1);
+      const ns = LDR.sig.userName(n).split(".").slice(0, -1);
       let k = 0;
       while (k < mods.length && k < ns.length && mods[k] === ns[k]) k++;
       return mods.map((seg) => ({ seg, kind: "module" }))
@@ -551,9 +551,11 @@
     });
   }
 
+  // 表示用の短い名前。private 名は利用者名（`_private.….0.` を外したもの）で
   function shortOf(n) {
-    const p = String(n).split(".");
-    return p.length <= 2 ? n : p.slice(-2).join(".");
+    const u = LDR.sig.userName(n);
+    const p = u.split(".");
+    return p.length <= 2 ? u : p.slice(-2).join(".");
   }
 
   /* ================= 監査サマリ =================
@@ -631,10 +633,10 @@
     const url = P ? P.docsUrl(nd, name) : null;
     const pkg = P ? (P.packageOf(nd && nd.module) || P.packageOf(name)) : "";
     const leaf = encodeURIComponent(String(name).split(".").slice(-1)[0]);
-    return (url ? `<a href="${esc(url)}" target="_blank" rel="noopener" class="lnk" style="color:${P.colorOf(pkg)}"
-           title="${esc(P.labelOf(pkg))} の公式ドキュメント（${url.includes("search.html") ? "検索" : "この宣言のページ"}）: ${esc(url)}">📘 ${esc(P.labelOf(pkg))} docs</a>` : "")
-      + `<a href="https://leansearch.net/?q=${leaf}" target="_blank" rel="noopener" class="lnk"
-           title="LeanSearch で意味検索">🔎 LeanSearch</a>`;
+    return (url ? `<a href="${esc(url)}" target="_blank" rel="noopener" class="btn" style="color:${P.colorOf(pkg)};border-color:${P.colorOf(pkg)}88"
+           title="${esc(P.labelOf(pkg))} の公式ドキュメント（${url.includes("search.html") ? "検索" : "この宣言のページ"}）: ${esc(url)}">📘 ${esc(P.labelOf(pkg))} docs ↗</a>` : "")
+      + `<a href="https://leansearch.net/?q=${leaf}" target="_blank" rel="noopener" class="btn"
+           title="LeanSearch で意味検索">🔎 LeanSearch ↗</a>`;
   }
 
   /* docString の最小限の整形。バッククォートはコード、空行は段落。それ以上の Markdown は解釈しない
@@ -644,6 +646,53 @@
     return paras.map((p) => `<p>${esc(p.replace(/\s*\n\s*/g, " ")).replace(/`([^`]+)`/g, "<code>$1</code>")}</p>`).join("");
   }
 
+  /* 原文の色付け。構文解析はしない（Lean の文法を再実装すると必ず乖離する）。
+     行ごとに、コメント（`--` と `/- … -/`。複数行は状態で持ち越す）、文字列、属性 `@[…]`、
+     先頭のキーワードと宣言名だけを色で分ける。残りは素のまま。行番号は宣言範囲の開始行から。 */
+  const LEAN_KW = new Set(["theorem", "lemma", "def", "abbrev", "instance", "structure", "class", "inductive",
+    "where", "extends", "deriving", "namespace", "section", "end", "open", "variable", "universe", "private",
+    "protected", "noncomputable", "partial", "unsafe", "by", "fun", "let", "have", "show", "from", "match", "with",
+    "if", "then", "else", "do", "return", "for", "in", "mut", "calc", "at", "import", "export", "opaque", "axiom",
+    "example", "set_option", "attribute", "local", "scoped", "macro", "syntax", "elab", "omit", "include"]);
+  function leanLine(line, st) {
+    let out = "", i = 0;
+    const put = (cls, t) => { out += cls ? `<span class="${cls}">${esc(t)}</span>` : esc(t); };
+    while (i < line.length) {
+      if (st.block > 0) {
+        const close = line.indexOf("-/", i), open = line.indexOf("/-", i);
+        if (open >= 0 && (close < 0 || open < close)) { put("cm", line.slice(i, open + 2)); st.block++; i = open + 2; continue; }
+        if (close >= 0) { put("cm", line.slice(i, close + 2)); st.block--; i = close + 2; continue; }
+        put("cm", line.slice(i)); break;
+      }
+      const rest = line.slice(i);
+      let m;
+      if (rest.startsWith("--")) { put("cm", rest); break; }
+      if (rest.startsWith("/-")) { st.block++; put("cm", "/-"); i += 2; continue; }
+      if ((m = rest.match(/^"(?:[^"\\]|\\.)*"/))) { put("st", m[0]); i += m[0].length; continue; }
+      if ((m = rest.match(/^@\[[^\]]*\]/))) { put("at", m[0]); i += m[0].length; continue; }
+      if ((m = rest.match(/^[A-Za-z_][A-Za-z0-9_'!?.₀-₉]*/))) {
+        const w = m[0];
+        if (LEAN_KW.has(w)) {
+          put("kw", w); i += w.length;
+          // 宣言キーワードの直後の識別子は宣言名
+          const nm = line.slice(i).match(/^(\s+)([^\s(){}\[\]:]+)/);
+          if (nm && /^(theorem|lemma|def|abbrev|instance|structure|class|inductive|opaque|axiom|namespace|section|example)$/.test(w)) {
+            put("", nm[1]); put("nm", nm[2]); i += nm[0].length;
+          }
+          continue;
+        }
+        put("", w); i += w.length; continue;
+      }
+      put("", rest[0]); i += 1;
+    }
+    return out;
+  }
+  function sourceHtml(src, firstLine) {
+    const st = { block: 0 };
+    return String(src).split("\n").map((l, k) =>
+      `<div class="ln"><span class="no">${firstLine + k}</span><span class="tx">${leanLine(l, st) || " "}</span></div>`).join("");
+  }
+
   /* パッケージの札（対象の外の宣言にだけ。対象のパッケージは出さない） */
   function pkgChip(nd) {
     const P = LDR.pkg;
@@ -651,7 +700,7 @@
     const p = P.packageOf(nd.module);
     const tp = LDR.canvas && LDR.canvas.targetPackage ? LDR.canvas.targetPackage(S.state) : "";
     if (!p || p === tp) return "";
-    return `<span class="text-[10px] px-1.5 py-0.5 rounded-sm border" style="border-color:${P.colorOf(p)};color:${P.colorOf(p)}"
+    return `<span class="tag" style="color:${P.colorOf(p)};background:${P.colorOf(p)}14"
       title="対象の外のパッケージ ${esc(p)} の宣言（${esc(nd.module)}）">${esc(P.labelOf(p))}</span>`;
   }
 
@@ -664,11 +713,10 @@
     const tp = LDR.canvas && LDR.canvas.targetPackage ? LDR.canvas.targetPackage(S.state) : "";
     const keys = Object.keys(sum).sort((a, b) => (a === tp ? -1 : b === tp ? 1 : sum[b].n - sum[a].n));
     if (!keys.length) return "";
-    return `<div class="flex items-baseline gap-1 flex-wrap">
-      <span class="text-[10px] text-stone-400 shrink-0" title="直接依存する宣言が定義されているモジュールを、パッケージごとに数えたもの">依存パッケージ</span>
-      ${keys.map((p) => `<span class="text-[10px] px-1.5 py-0.5 rounded-sm ${p === tp ? "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300" : "border"}"
-          style="${p === tp ? "" : `border-color:${P.colorOf(p)};color:${P.colorOf(p)}`}"
-          title="${esc(sum[p].modules.sort().join("\n"))}">${esc(P.labelOf(p))}${p === tp ? "（対象）" : ""} ${sum[p].n}</span>`).join("")}
+    return `<div class="row">
+      <span class="lbl" title="直接依存する宣言が定義されているモジュールを、パッケージごとに数えたもの">依存先</span>
+      ${keys.map((p) => `<span class="tag" style="${p === tp ? "" : `color:${P.colorOf(p)};background:${P.colorOf(p)}14`}"
+          title="${esc(P.labelOf(p))}${p === tp ? "（対象のパッケージ）" : ""}: ${esc(sum[p].modules.sort().join("\n"))}">${esc(P.labelOf(p))}${p === tp ? "（対象）" : ""} ${sum[p].n}</span>`).join("")}
     </div>`;
   }
 
@@ -737,10 +785,11 @@
     const args = B.filter((b) => !b.prop);
     const hyps = B.filter((b) => b.prop);
     // 区画の札（引数・仮定・結論）は幅を固定した列。CSS は index.html の .pv .sig-sec（w-7 では縦に割れた。実測）
+    // 札の幅は em（index.html の .pv .sig-sec .lbl）。px だと文字が大きく描かれる環境で本文に密着する
     const section = (label, rows, barColor, tone) => rows.length ? `
       <div class="sig-sec" style="border-left-color:${barColor}">
         <span class="lbl ${tone}">${label}</span>
-        <div class="min-w-0 flex-1">${rows.join("")}</div>
+        <div class="min-w-0 flex-1" style="min-width:0;flex:1 1 auto">${rows.join("")}</div>
       </div>` : "";
     const line = (body) => `<div class="sig-line">${body}</div>`;
     const sub = (t) => `<span class="text-[9.5px] text-stone-400 mr-1">${t}</span>`;
@@ -767,51 +816,53 @@
 
   /* 宣言の印（由来・派生・断片・sorry・instance・reducible・形・条件）。中央の見出しと
      右のプレビューで同じものを使う（二か所で別々に組むと必ず乖離する）。 */
-  function markChips(name, nd, dv) {
-    const chip = (t, cls) => `<span class="text-[10px] px-1.5 py-0.5 rounded-sm ${cls}">${t}</span>`;
+  /* 押せるもの（由来へ・派生の開閉）は .btn、押せない印は .tag（index.html の .pv）。中央の見出しは
+     .pv の外なので、そこでは同じ見た目を Tailwind のクラスで与える（inPv=false）。 */
+  function markChips(name, nd, dv, inPv) {
+    const tag = (t, cls, title) => inPv
+      ? `<span class="tag ${cls || ""}" title="${esc(title || "")}">${t}</span>`
+      : `<span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300 ${cls || ""}" title="${esc(title || "")}">${t}</span>`;
+    const btnCls = (on) => inPv ? `btn${on ? " on" : ""}`
+      : `text-[10px] px-1.5 py-0.5 rounded-sm border ${on ? "bg-stone-900 text-white border-stone-900 dark:bg-stone-100 dark:text-stone-900" : "bg-white text-stone-700 border-stone-300 hover:bg-stone-100 dark:bg-stone-900 dark:text-stone-200 dark:border-stone-600"}`;
     // 法則の形は命題にだけ意味がある（インスタンス等のデータは構文上 refl の形を持ち得る）
     const sh = nd.isProp ? LDR.sig.SHAPE[nd.shape] : null;
-    /* 由来。派生・断片なら「X の派生: 単射性」、由来を持つ側なら「派生 n」（押すと開閉）と「断片 m」 */
+    /* 由来。派生・断片なら「X の派生: 単射性」（押すと由来へ）、由来を持つ側なら「派生 n」（押すと開閉）と「断片 m」 */
     const OK = LDR.sig.ORIGIN_KIND, OR = LDR.sig.ORIGIN_REL;
     const originChip = nd.originRel && nd.origin
-      ? `<button data-sel="${esc(nd.origin)}" title="${esc(nd.origin)}（${esc((OK[nd.originKind] || {}).note || nd.originKind)}）"
-           class="text-[10px] px-1.5 py-0.5 rounded-sm bg-stone-100 text-stone-700 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-200">
-           ${esc(shortOf(nd.origin))} の${esc((OR[nd.originRel] || {}).ja || nd.originRel)}: ${esc((OK[nd.originKind] || {}).ja || nd.originKind)}</button>`
+      ? `<button data-sel="${esc(nd.origin)}" class="${btnCls(false)}" title="由来 ${esc(nd.origin)} を見る（${esc((OK[nd.originKind] || {}).note || nd.originKind)}）">
+           ${esc(shortOf(nd.origin))} の${esc((OR[nd.originRel] || {}).ja || nd.originRel)}: ${esc((OK[nd.originKind] || {}).ja || nd.originKind)} ↗</button>`
       : "";
     const fc = (dv.facetCount || {})[name] || 0, pc = (dv.partCount || {})[name] || 0;
     const open = fc && S.isClusterOpen(name), forced = fc && S.isClusterForced(name);
     const reach = dv.facetReach ? (dv.facetReach[name] || 0) : fc;
     const clusterChip = fc
-      ? `<button data-cluster="${esc(name)}" title="${esc(`この宣言から Lean が作った派生 ${fc} 件。`
+      ? `<button data-cluster="${esc(name)}" class="${btnCls(open)}" title="${esc(`この宣言から Lean が作った派生 ${fc} 件。`
              + (forced ? "中心または経路表示のため固定で開いています" : `押すと一覧とグラフで開閉（この中心から見えるのは ${reach} 件）`))}"
-           class="text-[10px] px-1.5 py-0.5 rounded-sm ${open
-             ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
-             : "bg-stone-100 text-stone-700 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-200"}">派生 ${fc} ${forced ? "▾ 固定" : open ? "▾" : "▸"}</button>`
+           >派生 ${fc} ${forced ? "▾ 固定" : open ? "▾" : "▸"}</button>`
       : "";
-    const partChip = pc ? chip(`断片 ${pc}`, "bg-stone-100 text-stone-500 dark:bg-stone-800 dark:text-stone-400") : "";
     return [
-      originChip, clusterChip, partChip,
-      nd.usesSorry ? chip("sorry を含む", "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300") : "",
-      nd.isInstance ? chip("instance", "bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-200") : "",
-      nd.reducibility === "reducible" ? chip("reducible", "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300") : "",
-      sh ? `<span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200"
-              title="${esc(sh.note)}">${sh.ja}</span>` : "",
+      originChip, clusterChip,
+      pc ? tag(`断片 ${pc}`, "", "証明・本体から切り出された補助の数（由来に埋め戻して表示）") : "",
+      LDR.sig.isPrivateName(name) ? tag("private", "", "private 宣言（モジュールの外からは見えない）") : "",
+      nd.usesSorry ? tag("sorry を含む", inPv ? "" : "bg-rose-100 text-rose-700", "証明に sorry がある") : "",
+      nd.isInstance ? tag("instance", "", "型クラスのインスタンスとして登録されている") : "",
+      nd.reducibility === "reducible" ? tag("reducible", "", "@[reducible]（abbrev 等）") : "",
+      sh ? tag(sh.ja, "", sh.note) : "",
       condChip(name, nd),
     ].filter(Boolean).join(" ");
   }
 
   /* 公理のチップ。押すと中心からその公理に至る経路（順序区間）を表示する。 */
-  function axiomChips(nd, st) {
+  function axiomChips(nd, st, inPv) {
     return nd.axioms.map((a) => {
       const bad = a === "sorryAx";
       const extra = !STD.has(a) && !bad;
       const on = st.traceTarget === a;
-      const cls = bad ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-200"
-                : extra ? "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200"
-                : "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300";
-      return `<button data-trace="${esc(a)}" class="font-mono text-[10.5px] px-1.5 py-0.5 rounded-sm ${cls}
-                ${on ? "ring-2 ring-amber-500" : ""}"
-                title="${on ? "経路表示を解除" : "中心からこの公理に至る経路を表示"}">${esc(a)}</button>`;
+      const tone = bad ? "color:#9f1239;border-color:#fda4af" : extra ? "color:#92400e;border-color:#fcd34d" : "";
+      const cls = inPv ? `btn font-mono${on ? " on" : ""}`
+        : `font-mono text-[10.5px] px-1.5 py-0.5 rounded-sm border ${on ? "bg-stone-900 text-white border-stone-900" : "bg-white border-stone-300 hover:bg-stone-100 dark:bg-stone-900 dark:border-stone-600"}`;
+      return `<button data-trace="${esc(a)}" class="${cls}" style="${on ? "" : tone}"
+                title="${on ? "経路表示を解除" : "中心からこの公理に至る経路をグラフに表示"}">${esc(a)}${on ? " ✕" : ""}</button>`;
     }).join(" ") || `<span class="text-[11px] text-emerald-600 dark:text-emerald-400">なし（公理非依存）</span>`;
   }
 
@@ -846,9 +897,9 @@
           <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300">${kinfo(nd.kind).ja}</span>
           <span class="font-mono text-[9.5px] text-stone-500" title="${esc(nd.module)}">${esc(shortOf(nd.module))}${nd.line ? ":" + nd.line : ""}</span>
           ${pkgChip(nd)}
-          ${markChips(name, nd, dv)}
+          ${markChips(name, nd, dv, false)}
           ${nd.axioms.length
-            ? `<span class="text-[10px] text-stone-500">公理</span>${axiomChips(nd, st)}`
+            ? `<span class="text-[10px] text-stone-500">公理</span>${axiomChips(nd, st, false)}`
             : `<span class="text-[10px] text-emerald-600 dark:text-emerald-400">公理非依存</span>`}
         </div>`;
     });
@@ -927,21 +978,24 @@
     const canOpen = depth > 0 && (((nd.typeDeps || []).length + (nd.valueDeps || []).length) > 0);
     const sh = nd.isProp ? LDR.sig.SHAPE[nd.shape] : null;
     const concl = conclusionOf(nd);
-    /* 一行目: ▸（開閉）／★（公理）・種別の点・名前・形・経由。二行目: その前提の結論（一行、切り詰め）。
-       列は CSS grid（index.html の .pv .prem）で揃える。 */
+    /* 一行目: ▸（開閉）／★（公理）・種別の点・名前・形・経由・↗（見る）。二行目: その前提の結論（一行、切り詰め）。
+       列は CSS grid（index.html の .pv .prem）で揃える。
+       名前を押すと **その場で開閉** する（以前は押すと右パネルがその宣言へ飛び、図を読んでいる途中で
+       文脈を失った。指摘）。別の宣言として見たいときは行末の ↗ を押す（履歴に積まれ、‹ で戻れる）。
+       開いているときは結論の一行を出さない（入れ子の図の横線の下に同じ結論が出る。重複していた）。 */
     const toggle = canOpen
       ? `<button data-deriv="${esc(name)}" title="${open ? "この前提の導出を閉じる" : "この前提の導出を開く"}"
            class="text-[10px] text-stone-400 hover:text-stone-700 text-center">${open ? "▾" : "▸"}</button>`
       : `<span class="text-[9px] text-stone-300 dark:text-stone-600 text-center">·</span>`;
-    const head = `<div class="nm">
+    const head = `<div class="nm" ${canOpen ? `data-deriv="${esc(name)}"` : ""} title="${esc(name)}${canOpen ? "（押すと導出を開閉）" : ""}">
         ${role === "axiom" ? `<span class="shrink-0 text-[10px] leading-none" style="color:${col}" title="公理（これ以上遡れない仮定）">★</span>` : dot(nd.kind, 6)}
-        <button data-sel="${esc(name)}" title="${esc(name)}"
-          class="font-mono text-[11px] text-left truncate min-w-0 hover:underline">${esc(shortOf(name))}</button>
+        <span class="t font-mono text-[11px] truncate min-w-0">${esc(shortOf(name))}</span>
         ${sh ? `<span class="shrink-0 text-[9px]" style="color:${col}" title="${esc(sh.note)}">${sh.ja}</span>` : ""}
         ${viaTag(via)}
         ${nd.usesSorry ? '<span class="shrink-0 text-[9px] text-rose-600">sorry</span>' : ""}
-      </div>`;
-    const sub = concl ? `<div class="cl" title="${esc(nd.conclusion || nd.typeString || "")}">⊢ ${esc(concl)}</div>` : "";
+      </div>
+      <button class="go" data-sel="${esc(name)}" title="この宣言を右パネルで見る（グラフでも選択。‹ で戻れる）">↗</button>`;
+    const sub = concl && !(open && canOpen) ? `<div class="cl" title="${esc(nd.conclusion || nd.typeString || "")}">⊢ ${esc(concl)}</div>` : "";
     const nested = open && canOpen
       ? `<div class="nest" style="border-color:${col}66">${derivation(name, st, depth - 1, seen, met)}</div>` : "";
     return `<div class="prem">${toggle}${head}${sub}${nested}</div>`;
@@ -957,15 +1011,22 @@
       .filter((p) => !seen.has(p.name));
     for (const p of premises) seen.add(p.name);
 
+    /* 脚注。語彙（定義・型）は前提ではないので図の外に、件数と名前だけを一行で。
+       多い（9 件以上）ときは畳み、押して開く（cslib の定理は語彙 54 件で、チップが図を埋めた。実測）。
+       語彙の名前は押しても飛ばない（図の中で飛ぶ操作は ↗ だけ）。 */
     const foot = [];
-    if (parts.vocab.length) foot.push(`<span class="shrink-0" style="color:${LDR.roles.ROLE.vocab.c}">語彙 ${parts.vocab.length}</span>`
-      + parts.vocab.map((v) => `<button data-sel="${esc(v.name)}" title="${esc(v.name)}"
-          class="font-mono px-1 rounded-sm bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-200">${esc(shortOf(v.name))}</button>`).join(""));
+    if (parts.vocab.length) {
+      // 語彙: 単クリックでグラフの経路を強調（図は読んだまま）、ダブルクリックで中心にする
+      const chips = parts.vocab.map((v) => `<button class="tag hl font-mono" data-hl="${esc(v.name)}" title="${esc(v.name)}（語彙: 主張を書くための定義・型）
+クリック: グラフで中心までの経路を強調 / ダブルクリック: 中心にする">${esc(shortOf(v.name))}</button>`).join(" ");
+      foot.push(parts.vocab.length > 8
+        ? `<details class="inline"><summary class="cursor-pointer inline" style="color:${LDR.roles.ROLE.vocab.c}" title="主張を書くための定義・型（前提ではない）">語彙 ${parts.vocab.length} ▸</summary> ${chips}</details>`
+        : `<span style="color:${LDR.roles.ROLE.vocab.c}" title="主張を書くための定義・型（前提ではない）">語彙 ${parts.vocab.length}</span> ${chips}`);
+    }
     if (parts.frame.length) foot.push(`<span class="text-stone-400" title="${esc(parts.frame.map((v) => v.name).join(", "))}">骨組み ${parts.frame.length}</span>`);
     if (parts.part && parts.part.length) foot.push(`<span class="text-stone-400" title="${esc(parts.part.map((v) => v.name).join(", "))}（証明・本体の切り出し。中身は前提として上に展開済み）">断片 ${parts.part.length}</span>`);
-    const footHtml = foot.length ? `<div class="mt-1.5 flex items-baseline gap-1 flex-wrap text-[9px]">${foot.join("")}</div>` : "";
-    const concl = `<div class="font-mono text-[11px] text-stone-900 dark:text-stone-100 leading-snug break-words"
-           title="${esc(nd.conclusion || nd.typeString || "")}">⊢ ${esc(conclusionOf(nd)) || "—"}</div>`;
+    const footHtml = foot.length ? `<div class="mt-1.5 text-[9px] leading-relaxed" style="word-spacing:2px">${foot.join(" · ")}</div>` : "";
+    const concl = `<div class="fig-concl" title="${esc(nd.conclusion || nd.typeString || "")}">⊢ ${esc(conclusionOf(nd)) || "—"}</div>`;
 
     /* 前提が無い（定義そのもの、または骨組みだけで閉じている）なら、図は結論一行。
        空の前提欄と横線を出すと、何も無いのに六行使う（実測）。 */
@@ -994,10 +1055,10 @@
   function subjectHeader(st, dv, name) {
     const nd = st.nodes[name];
     const h = st.previewHist, pos = st.previewPos;
-    const chips = h.map((x, i) => `<button data-preview="${esc(x)}" title="${esc(x)}${i === pos ? "（いま見ている）" : ""}"
-        class="font-mono text-[10px] px-1.5 py-0.5 rounded-sm shrink-0 ${i === pos
-          ? "bg-indigo-600 text-white"
-          : "bg-stone-100 text-stone-600 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-300"}"
+    const chips = h.map((x, i) => `<button data-preview="${esc(x)}" title="${esc(x)}${i === pos ? "（いま見ている）" : "（押すとこの宣言を見て、グラフで選択）"}"
+        class="font-mono text-[10px] px-1.5 py-0.5 rounded-md shrink-0 border ${i === pos
+          ? "bg-indigo-600 text-white border-indigo-600"
+          : "bg-white text-stone-600 border-stone-300 hover:bg-stone-100 dark:bg-stone-900 dark:text-stone-300 dark:border-stone-600"}"
         >${esc(shortOf(x))}</button>`).join("");
     const modeBtn = (v, l, t) => `<button data-follow="${v}" title="${esc(t)}"
         class="px-2 py-0.5 text-[10.5px] rounded-sm ${(!!st.previewFollow) === (v === "1")
@@ -1021,12 +1082,15 @@
         ${navBtn("data-pfwd", "›", pos < h.length - 1, "次に見た宣言へ（] キー）")}
       </div>
       ${chips ? `<div class="flex gap-1 px-1 pb-1.5 overflow-x-auto" style="scrollbar-width:thin" title="見た順。押すとその宣言を見て、グラフで選択する">${chips}</div>` : ""}
-      ${nd ? `<div class="px-1 pb-1.5 flex items-center gap-1.5 flex-wrap border-b border-stone-200 dark:border-stone-700">
-        ${role}
-        ${dot(nd.kind, 7)}
-        <span class="font-mono text-[12px] font-medium break-all">${esc(name)}</span>
-        <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300">${kinfo(nd.kind).ja}</span>
-        ${isCenter ? "" : `<button data-nav="${esc(name)}" class="text-[10px] px-1.5 py-0.5 rounded-sm bg-indigo-600 text-white hover:bg-indigo-500">中心にする</button>`}
+      ${nd ? `<div class="px-1 pb-1.5 border-b border-stone-200 dark:border-stone-700">
+        <div class="flex items-center gap-1.5" style="min-height:22px">
+          ${role}
+          ${dot(nd.kind, 7)}
+          <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300">${kinfo(nd.kind).ja}</span>
+          <span class="flex-1"></span>
+          ${isCenter ? "" : `<button data-nav="${esc(name)}" class="text-[10px] px-1.5 py-0.5 rounded-sm bg-indigo-600 text-white hover:bg-indigo-500 shrink-0">中心にする</button>`}
+        </div>
+        <div class="font-mono text-[12px] font-medium leading-snug mt-0.5" style="overflow-wrap:anywhere">${esc(name)}</div>
       </div>` : ""}`;
   }
 
@@ -1061,34 +1125,32 @@
     const where = `${nd.module}${nd.line ? ":" + nd.line + (nd.lineEnd && nd.lineEnd !== nd.line ? "–" + nd.lineEnd : "") : ""}`;
     const sourceBlock = nd.source
       ? `<details data-keep="src" class="sec"${open("src", srcLines <= 12)}>
-          <summary><span>原文</span><span class="font-mono text-stone-400">${esc(where)}</span><span class="text-stone-400">${srcLines} 行</span></summary>
-          <pre class="font-mono text-[10.5px] leading-relaxed whitespace-pre overflow-x-auto
-            border-t border-stone-200 dark:border-stone-700 px-2 py-1.5 max-h-72 overflow-y-auto">${esc(nd.source)}</pre>
+          <summary title="${esc(where)}"><span>原文</span><span class="grow font-mono text-stone-400">${esc(shortOf(nd.module))}${nd.line ? ":" + nd.line : ""}</span><span class="text-stone-400">${srcLines} 行</span></summary>
+          <div class="src">${sourceHtml(nd.source, nd.line || 1)}</div>
         </details>`
       : `<div class="text-[10px] text-stone-400">原文なし（古い形式のレポートか、ソースが検索パスに無い）</div>`;
     /* 区画の順: 所在と文書 → 原文 → シグネチャ → 説明 → 印 → 公理 → 数値 → 依存パッケージ → 導出図 → 型 → 証明項。
        隙間は .pv の space-y で一定（6px）。由来は印の中の一つ（「X の派生: 単射性」）にだけ出す
        （数値の行にも「成員: LE」と重ねて出していた。実測）。 */
     body.innerHTML = header + `
-      <div class="pv px-1 pt-1.5 space-y-1.5">
+      <div class="pv px-1 pt-2">
         <div class="row">
-          <span class="font-mono text-[10px] text-stone-500" title="${esc(nd.module)}">${esc(where)}</span>
+          <span class="font-mono text-[10px] text-stone-500 min-w-0 truncate" style="flex:1 1 auto" title="${esc(where)}">${esc(where)}</span>
           ${pkgChip(nd)}
-          <span class="flex-1"></span>
-          ${docLinks(nd, name)}
+          <span class="flex items-center gap-2" style="flex:none;white-space:nowrap">${docLinks(nd, name)}</span>
         </div>
         ${sourceBlock}
         <div class="sec">
           ${signatureBlock(nd) || `<div class="px-2 py-1 text-[11px] text-stone-400">シグネチャ情報なし</div>`}
         </div>
-        ${nd.docString ? `<div class="text-[11px] text-stone-600 dark:text-stone-400 leading-relaxed space-y-1">${docHtml(nd.docString)}</div>` : ""}
-        <div class="row">${markChips(name, nd, dv)}</div>
-        <div class="row"><span class="lbl">公理</span>${axiomChips(nd, st)}</div>
+        ${nd.docString ? `<div class="text-[11px] text-stone-600 dark:text-stone-400 leading-relaxed space-y-1 px-0.5">${docHtml(nd.docString)}</div>` : ""}
+        <div class="row"><span class="lbl">印</span>${markChips(name, nd, dv, true)}</div>
+        <div class="row"><span class="lbl">公理</span>${axiomChips(nd, st, true)}</div>
         <div class="row text-[10px] text-stone-500">
-          <span class="lbl">大きさ</span>
-          <span title="主張の節点数">型 ${nd.typeSize || 0}</span><span title="証明項・本体の節点数">証明 ${nd.valueSize || 0}</span>
-          ${nd.subject ? `<span>主題 <span class="font-mono" title="${esc(nd.subject)}">${esc(shortOf(nd.subject))}</span></span>` : ""}
-          ${nd.numUniverse ? `<span>宇宙 ${nd.numUniverse}</span>` : ""}
+          <span class="lbl">数値</span>
+          <span class="tag" title="主張（型）の節点数">型 ${nd.typeSize || 0}</span><span class="tag" title="証明項・本体の節点数">証明 ${nd.valueSize || 0}</span>
+          ${nd.subject ? `<span class="tag font-mono" title="主題（何についての宣言か）: ${esc(nd.subject)}">主題 ${esc(shortOf(nd.subject))}</span>` : ""}
+          ${nd.numUniverse ? `<span class="tag" title="宇宙変数の数">宇宙 ${nd.numUniverse}</span>` : ""}
         </div>
         ${depPackages(nd)}
         <details data-keep="deriv" class="sec"${open("deriv")}>

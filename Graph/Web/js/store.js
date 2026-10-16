@@ -125,6 +125,11 @@
     const em = state.edgeMode;
     if (!cache.decl[em]) cache.decl[em] = G.buildIndices(state.nodes, em);
     if (!cache.mod[em]) cache.mod[em] = G.buildModuleIndices(state.nodes, em);
+    /* 断片だけを由来に埋め戻した索引（派生は全て開く）。極小元 min(↓d) はこちらで測る。
+       断片（`PMF.pure._proof_1`）は由来の証明の一部であって語彙の原子ではない。レポートの外に
+       依存が続いていて葉に見えるだけなのに、元の索引で測ると極小元に並ぶ（cslib で実測）。 */
+    if (!cache.inlined) cache.inlined = {};
+    if (!cache.inlined[em]) cache.inlined[em] = G.buildIndices(G.effectiveNodes(state.nodes, () => true).nodes, em);
     if (!cache.defaultCenter[em]) {
       // 既定中心は手書きの宣言から選ぶ。骨組み・派生・断片は候補にしない
       const skip = LDR.roles ? (n) => {
@@ -141,7 +146,8 @@
       }
       cache.facetOrigins = s;
     }
-    return { decl: cache.decl[em], mod: cache.mod[em], defaultCenter: cache.defaultCenter[em], facetOrigins: cache.facetOrigins };
+    return { decl: cache.decl[em], mod: cache.mod[em], inlined: cache.inlined[em],
+             defaultCenter: cache.defaultCenter[em], facetOrigins: cache.facetOrigins };
   }
 
   /* ---------- 順序区間 [t, c] = ↑t ∩ ↓c ----------
@@ -463,8 +469,9 @@
 
     /* min(↓d) は宣言 d の性質であって、いま何を展開しているかとは無関係。
        可視集合から計算すると初期表示で空になり、意味も違ってしまう。
-       元のグラフで測る（断片・派生の畳み込みの影響を受けない）。 */
-    const rawDep = state.granularity === "module" ? idx.dep : ix.decl.dep;
+       断片だけを由来に埋め戻した索引（inlined。派生は開いたまま）で測る。断片は由来の証明の
+       一部であって原子ではないので極小元に並べない。派生の畳み込みの影響は受けない。 */
+    const rawDep = state.granularity === "module" ? idx.dep : ix.inlined.dep;
     const fullDep = G.reachable(c, rawDep, 64);
     const mf = G.minimalAndFrontier(Object.keys(fullDep), rawDep);
     derived.trueMinimal = mf.trueMinimal;
@@ -790,6 +797,14 @@
       state.pathFrom = n;              // 中心までの流れを浮かび上がらせる
       // 追従なら、覗いた先をそのままプレビューに出す。移動はしない。
       if (state.previewFollow && n) previewPush(n);
+      refresh();
+    },
+    /** グラフで選択して中心までの経路を光らせるだけ。プレビューは動かさない
+        （導出図の語彙を押したとき、読んでいる図を失わずに「どこにあるか」を見るため）。 */
+    highlight(n) {
+      if (!n) return;
+      state.selected = n;
+      state.pathFrom = n;
       refresh();
     },
     /** 履歴のチップを押す。その宣言を見て、選択にもする（グラフで経路が光る）。 */

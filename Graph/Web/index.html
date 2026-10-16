@@ -47,33 +47,75 @@
   /* 右パネル（プレビュー）の部品。隙間・札の大きさ・区画の枠を一か所で決める。
      Tailwind のクラスを行ごとに並べると、行ごとに隙間や大きさがずれる（実測）。 */
   .pv { font-size: 11px; }
+  .pv > * + * { margin-top: 8px; }
+  /* 押せるもの（btn）と押せない札（tag）を様式で分ける。同じ見た目で混ぜると、何が操作か分からない */
+  .pv .btn { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; line-height: 18px; padding: 0 7px;
+             border: 1px solid #d6d3d1; border-radius: 6px; background: #fff; color: #44403c; cursor: pointer;
+             white-space: nowrap; text-decoration: none; }
+  .pv .btn:hover { background: #f5f5f4; border-color: #a8a29e; }
+  .dark .pv .btn { background: #1c1917; border-color: #57534e; color: #e7e5e4; }
+  .dark .pv .btn:hover { background: #292524; }
+  .pv .btn.on { background: #1c1917; border-color: #1c1917; color: #fff; }
+  .dark .pv .btn.on { background: #f5f5f4; border-color: #f5f5f4; color: #1c1917; }
+  .pv .tag { display: inline-flex; align-items: center; font-size: 10px; line-height: 17px; padding: 0 6px;
+             border-radius: 4px; background: #f5f5f4; color: #57534e; white-space: nowrap; cursor: default; }
+  .dark .pv .tag { background: #292524; color: #d6d3d1; }
+  /* 押せる札（語彙など。クリックで経路の強調、ダブルクリックで中心へ）。枠は付けず、指したときに下線 */
+  .pv .tag.hl { cursor: pointer; }
+  .pv .tag.hl:hover { background: #e7e5e4; text-decoration: underline dotted; }
+  .dark .pv .tag.hl:hover { background: #44403c; }
   .pv .sec { border: 1px solid #e7e5e4; border-radius: 6px; background: #fafaf9; }
   .dark .pv .sec { border-color: #44403c; background: #0c0a09; }
   .pv .sec > summary { padding: 4px 8px; font-size: 10.5px; color: #57534e; cursor: pointer; user-select: none;
-                       display: flex; align-items: baseline; gap: 8px; }
+                       display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .pv .sec > summary > * { white-space: nowrap; flex: none; }
+  .pv .sec > summary > .grow { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .pv .sec > summary:focus { outline: none; }
+  .pv .sec > summary:focus-visible { outline: 2px solid #a5b4fc; outline-offset: -2px; border-radius: 6px; }
   .dark .pv .sec > summary { color: #d6d3d1; }
-  .pv .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 20px; }
-  .pv .lbl { font-size: 10px; color: #a8a29e; flex: none; white-space: nowrap; width: 34px; }
-  .pv .chip { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; line-height: 16px;
-              padding: 0 6px; border-radius: 4px; white-space: nowrap; }
-  .pv .lnk { font-size: 10.5px; color: #57534e; text-decoration: none; }
-  .pv .lnk:hover { text-decoration: underline; }
-  .dark .pv .lnk { color: #a8a29e; }
-  .pv .sig-sec { display: flex; gap: 8px; padding: 4px 6px 4px 8px; border-left: 3px solid #d6d3d1; }
+  /* 原文。行番号の列と、最小限の色付け（コメント・キーワード・属性・文字列） */
+  .pv .src { font: 10.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; overflow: auto; max-height: 24rem;
+             border-top: 1px solid #e7e5e4; background: #fff; }
+  .dark .pv .src { border-top-color: #44403c; background: #0c0a09; }
+  .pv .src .ln { display: flex; }
+  .pv .src .no { flex: none; width: 3.2em; padding-right: 8px; text-align: right; color: #a8a29e; user-select: none;
+                 background: #fafaf9; border-right: 1px solid #e7e5e4; }
+  .dark .pv .src .no { background: #1c1917; border-right-color: #44403c; }
+  .pv .src .tx { flex: 1; padding-left: 8px; white-space: pre; }
+  .pv .src .ln:hover { background: #f5f5f4; }
+  .dark .pv .src .ln:hover { background: #1c1917; }
+  .pv .src .kw { color: #4338ca; } .dark .pv .src .kw { color: #a5b4fc; }
+  .pv .src .cm { color: #6b7f6a; font-style: italic; } .dark .pv .src .cm { color: #86a784; }
+  .pv .src .at { color: #b45309; } .dark .pv .src .at { color: #fbbf24; }
+  .pv .src .st { color: #0f766e; } .dark .pv .src .st { color: #5eead4; }
+  .pv .src .nm { color: #1c1917; font-weight: 600; } .dark .pv .src .nm { color: #fafaf9; }
+  .pv .row { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; min-height: 20px; }
+  /* 札の幅は em（文字サイズに比例）。px で固定すると、文字が指定より大きく描かれる環境で
+     札が枠からはみ出して本文に密着した（「引数{F」「大き型 73」。実測） */
+  .pv .lbl { font-size: 10px; color: #a8a29e; flex: none; white-space: nowrap; min-width: 3.4em; padding-right: .4em; }
+  .pv .sig-sec { display: flex; gap: 10px; padding: 5px 6px 5px 8px; border-left: 3px solid #d6d3d1; }
   .pv .sig-sec + .sig-sec { border-top: 1px solid #e7e5e4; }
   .dark .pv .sig-sec + .sig-sec { border-top-color: #44403c; }
-  .pv .sig-sec .lbl { padding-top: 2px; }
+  .pv .sig-sec .lbl { padding-top: 2px; width: 3.4em; }
   .pv .sig-line { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
   .pv .fig-rule { display: flex; align-items: center; gap: 8px; margin: 6px 0 4px; }
   .pv .fig-rule > i { flex: 1; height: 1px; background: #a8a29e; }
   .pv .fig-rule > b { font: 10px ui-monospace, monospace; color: #57534e; max-width: 60%; overflow: hidden;
                       text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
   .dark .pv .fig-rule > b { color: #a8a29e; }
-  .pv .prem { display: grid; grid-template-columns: 14px 1fr; column-gap: 4px; padding: 2px 0; }
-  .pv .prem .nm { display: flex; align-items: center; gap: 5px; min-width: 0; }
-  .pv .prem .cl { grid-column: 2; font: 10px ui-monospace, monospace; color: #78716c; overflow: hidden;
+  .pv .prem { display: grid; grid-template-columns: 14px 1fr 18px; column-gap: 4px; padding: 2px 0; align-items: center; }
+  .pv .prem:hover { background: #f5f5f4; border-radius: 4px; }
+  .dark .pv .prem:hover { background: #1c1917; }
+  .pv .prem .nm { display: flex; align-items: center; gap: 5px; min-width: 0; cursor: default; }
+  .pv .prem .nm[data-deriv] { cursor: pointer; }
+  .pv .prem .nm[data-deriv]:hover .t { text-decoration: underline dotted; }
+  .pv .prem .go { grid-column: 3; width: 18px; height: 18px; font-size: 11px; color: #a8a29e; border-radius: 4px; }
+  .pv .prem .go:hover { color: #4338ca; background: #e0e7ff; }
+  .pv .prem .cl { grid-column: 2 / span 2; font: 10px ui-monospace, monospace; color: #78716c; overflow: hidden;
                   text-overflow: ellipsis; white-space: nowrap; }
-  .pv .prem .nest { grid-column: 2; margin: 4px 0 6px; padding-left: 8px; border-left: 2px solid #e7e5e4; }
+  .pv .prem .nest { grid-column: 2 / span 2; margin: 4px 0 6px; padding-left: 8px; border-left: 2px solid #e7e5e4; }
+  .pv .fig-concl { font: 11px/1.45 ui-monospace, monospace; color: #1c1917; overflow-wrap: anywhere; }
+  .dark .pv .fig-concl { color: #fafaf9; }
   .pv code { font: 10.5px ui-monospace, monospace; background: #f5f5f4; padding: 0 3px; border-radius: 3px; }
   .dark .pv code { background: #292524; }
   /* 集中表示では操作列を消さず、キャンバスの上に浮かせて残す。
@@ -293,7 +335,9 @@
           <div><b>右パネル</b>: 主語は一つ（「追従」なら選択中の宣言、「中心固定」ならグラフの中心）。
             依存・参照のタブもその宣言について出す。中央の見出しは常にグラフの中心。
             見た宣言の履歴は ‹ › と <kbd>[</kbd> <kbd>]</kbd> で戻る／進む。チップを押すとその宣言を見てグラフで選択する。
-            「原文」はソースの宣言範囲そのもの、「型（Lean の表示）」は Lean が整形した型。凡例（グラフ左上）は指すと展開。</div>
+            「原文」はソースの宣言範囲そのもの、「型（Lean の表示）」は Lean が整形した型。凡例（グラフ左上）は指すと展開。
+            枠付きのものは押せる（docs・公理・由来・派生・↗）、平らな札は押せない。導出図では前提の名前を押すとその場で開閉し、
+            行末の ↗ でその宣言へ移る（‹ で戻れる）。</div>
           <div><kbd>/</kbd>検索 <kbd>t</kbd>型のみ <kbd>m</kbd>粒度 <kbd>v</kbd>下錐 <kbd>p</kbd>ピン <kbd>0</kbd>全体 <kbd>f</kbd>集中 <kbd>[</kbd><kbd>]</kbd>見た宣言の前後</div>
         </div>
       </details>

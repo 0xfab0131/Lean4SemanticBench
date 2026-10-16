@@ -40,7 +40,7 @@ document.getElementById("depTabs").dataset.tab = "prev";
 S.refresh(true); render();
 const cen = S.derived.center;
 ok(html("inspector").includes("中心") && html("inspector").includes(cen), "中央の見出しは中心を名乗る", cen.split(".").slice(-1)[0]);
-ok(html("depBody").includes("見ている宣言") && html("depBody").includes("導出図") && html("depBody").includes("依存パッケージ"), "プレビューに主語・導出図・依存パッケージがある");
+ok(html("depBody").includes("見ている宣言") && html("depBody").includes("導出図") && html("depBody").includes("依存先"), "プレビューに主語・導出図・依存先（パッケージ）がある");
 ok(/data-keep="deriv"[^>]*>/.test(html("depBody")) && !/data-keep="deriv"[^>]*\sopen/.test(html("depBody")), "導出図は既定で畳まれている");
 
 // 選択を変えると右パネルの主語が変わり、中央の見出しは中心のまま
@@ -74,7 +74,11 @@ ok(html("depBody").includes("data-pback") && html("depBody").includes("data-pfwd
 const withSrc = S.state.order.map((n) => S.state.nodes[n]).find((n) => n.source);
 if (withSrc) {
   S.actions.select(withSrc.name); render();
-  ok(html("depBody").includes("原文") && html("depBody").includes(withSrc.source.split("\n")[0].trim().slice(0, 20).replace(/[&<>"]/g, "")), "原文はソースの行そのものを出す");
+  // 原文は色付けの span を挟んで出すので、タグを剥がした文字列で先頭行を比べる（行番号の列も付く）
+  const txt = html("depBody").replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/&quot;/g, "\"");
+  const first = withSrc.source.split("\n")[0].trim().slice(0, 24);
+  ok(html("depBody").includes("原文") && txt.includes(first) && html("depBody").includes(`class="no">${withSrc.line}<`),
+     "原文はソースの行そのものを、開始行からの行番号付きで出す", `${withSrc.line}: ${first}`);
 } else console.log("  skip  原文（この形式のレポートには原文が無い）");
 const withInst = S.state.order.map((n) => S.state.nodes[n]).find((n) => (n.binders || []).some((b) => b.kind === "inst"));
 if (withInst) {
