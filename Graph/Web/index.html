@@ -294,33 +294,34 @@
     <main class="relative flex-1 flex flex-col min-w-0">
 
       <!-- 詳細 -->
-      <section id="inspector" class="shrink-0 px-4 py-2.5 border-b border-stone-200 dark:border-stone-800
+      <section id="inspector" class="shrink-0 px-3 py-1.5 border-b border-stone-200 dark:border-stone-800
                                      bg-white dark:bg-stone-900"></section>
 
       <!-- 操作列。よく使うものだけを並べ、残りは「表示」に畳む -->
       <!-- overflow を持たせると、中の「表示 ▾」の浮遊メニューが切り取られる。
            横に溢れさせず、狭いときは折り返す。 -->
-      <div id="toolRow" class="shrink-0 px-3 py-1.5 flex items-center gap-x-2 gap-y-1.5 flex-wrap
+      <!-- 中央の列が 370px ほどしか無い環境（OS の拡大率が高く、三枚の欄を全て開いた状態）でも二行に収まる大きさ -->
+      <div id="toolRow" class="shrink-0 px-2 py-1 flex items-center gap-x-1.5 gap-y-1 flex-wrap
                   border-b border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-stone-950">
-        <label class="text-[12px] text-stone-500 shrink-0">上錐</label>
+        <label class="text-[11.5px] text-stone-500 shrink-0">上錐</label>
         <div id="segEdge" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800 shrink-0"></div>
-        <label class="text-[12px] text-stone-500 shrink-0">下錐</label>
+        <label class="text-[11.5px] text-stone-500 shrink-0">下錐</label>
         <div id="segRef" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800 shrink-0"></div>
-        <label class="flex items-center gap-1.5 text-[12px] text-stone-500 shrink-0">
+        <label class="flex items-center gap-1 text-[11.5px] text-stone-500 shrink-0">
           展開
-          <input id="depthRange" type="range" min="1" max="3" step="1" value="1" class="w-16">
+          <input id="depthRange" type="range" min="1" max="3" step="1" value="1" class="w-12">
           <span id="depthVal" class="w-2">1</span>
         </label>
-        <button id="btnFocus" class="px-2 py-1 rounded-md text-[12px] border border-stone-300 dark:border-stone-600
+        <button id="btnFocus" class="px-1.5 py-0.5 rounded-md text-[11.5px] border border-stone-300 dark:border-stone-600
                 hover:bg-stone-100 dark:hover:bg-stone-800 shrink-0"
                 title="中央と右パネルだけにする (f)">集中</button>
-        <button id="btnCollapse" class="hidden px-2 py-1 rounded-md text-[11.5px] shrink-0
+        <button id="btnCollapse" class="hidden px-1.5 py-0.5 rounded-md text-[11px] shrink-0
                 bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 dark:hover:bg-stone-600"></button>
 
         <!-- 浮遊メニューは fixed。祖先の overflow や重なり順に左右されないようにする。
              位置は index.js が開いたときに summary の座標から決める。 -->
         <details id="dView" class="shrink-0">
-          <summary class="px-2 py-1 rounded-md text-[12px] border border-stone-300 dark:border-stone-600
+          <summary class="px-1.5 py-0.5 rounded-md text-[11.5px] border border-stone-300 dark:border-stone-600
                           hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer select-none list-none">表示 ▾</summary>
           <div id="dViewPanel" class="fixed z-50 w-[min(420px,86vw)] p-3 space-y-2 rounded-lg shadow-xl
                       bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-700">
@@ -379,7 +380,7 @@
     <div class="resizer" data-resize="right"></div>
     <aside id="sideR" class="flex flex-col shrink-0 border-l border-stone-200 dark:border-stone-800
                   bg-white dark:bg-stone-900" style="width:330px">
-      <div id="depTabs" class="shrink-0 p-2 flex gap-1 flex-wrap border-b border-stone-200 dark:border-stone-800"></div>
+      <div id="depTabs" class="shrink-0 px-1.5 py-1.5 flex gap-0.5 flex-wrap border-b border-stone-200 dark:border-stone-800"></div>
       <div id="depBody" class="flex-1 min-h-0 overflow-y-auto p-1.5"></div>
     </aside>
   </div>

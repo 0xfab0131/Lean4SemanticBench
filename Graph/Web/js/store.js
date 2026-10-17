@@ -230,7 +230,7 @@
      deg(c) > deg(d) が起こり得るので、その並びは依存順序と両立しない。
      ここでは順序と両立する量だけを持つ。
 
-       closure  |↓d|        総仮定量。c ≺ d ⇒ m(c) < m(d) なので昇順は線形拡大になる。
+       closure  |↓d|        下方閉集合の元数。c ≺ d ⇒ m(c) < m(d) なので昇順は線形拡大になる。
        depth    最長導出鎖   何段の導出を経ているか。これも狭義に単調。
        minimal  |min(↓d)|   必要な原始要素の数。c ≺ d ⇒ m(c) ≤ m(d) の広義単調に
                             留まるので、並べ替えには使わない（--decl の参考値）。
@@ -238,7 +238,7 @@
      右パネルの依存一覧は closure の昇順で並べ、ldr_check は mono な尺度について
      破れ 0 を検査する。 */
   const METRICS = {
-    closure: { ja: "総仮定量 |↓d|", mono: true },
+    closure: { ja: "下方閉集合の元数 |↓d|", mono: true },
     depth:   { ja: "導出鎖の深さ",  mono: true },
     minimal: { ja: "極小仮定の数",  mono: false },
   };

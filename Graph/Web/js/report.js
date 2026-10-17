@@ -6,7 +6,7 @@
 
      1. 主張（What）        名前・種別・所在・パッケージ・docs・公理・sorry・形、原文、束縛と結論
      2. 前提（On what）     直接依存を 型依存（主張に現れる）/ 値依存（証明にだけ現れる）に分け、
-                            総仮定量 |↓x| の昇順（原始的なものから）
+                            下方閉集合の元数 |↓x| の昇順（原始的なものから）
      3. 道筋（How）         導出図の文章版（前提 → 横線＋規則名 → 結論。深さ指定）
      4. 基盤・原子・境界（Ultimately）
                             基盤 ∂_T x = 対象の閉包から外へ出る先（切れ目に依存しない）／
@@ -39,7 +39,7 @@
     { id: "frontier",   ja: "境界（読み込んだ範囲の切れ目 ∂x。極小元ではない）" },
     { id: "refs",    ja: "参照（主張で／証明で）" },
     { id: "path",    ja: "経路（中心との順序区間）" },
-    { id: "metrics", ja: "計量（総仮定量・導出鎖の深さ）" },
+    { id: "metrics", ja: "計量（下方閉集合の元数・導出鎖の深さ）" },
     { id: "meta",    ja: "来歴（対象・リビジョン・toolchain）" },
     { id: "figures", ja: "付録: 図（Mermaid。導出図・公理の流入・境界・経路を末尾にまとめる）" },
     { id: "notes",   ja: "注記（列の意味・測り方の説明）" },
@@ -271,7 +271,7 @@
       const entriesV = vDeps.filter((d) => d !== a && axOf(d).includes(a));
       const inStatement = tDeps.includes(a) || entriesT.length > 0;
       out.push("", `### ${code(a)}`);
-      out.push(`- ${inStatement ? "主張（型）の閉包に入っている" : "証明（値）にだけ入っている（証明を書き換えれば外せる可能性がある）"}${direct ? "。この宣言が直接使う" : ""}`);
+      out.push(`- ${inStatement ? "主張（型）の依存の閉包に入っている" : "証明（値）にだけ入っている（証明を書き換えれば外せる可能性がある）"}${direct ? "。この宣言が直接使う" : ""}`);
       // 入口は件数だけ（どれかは依存の表の「公理」列。三公理ぶん名前を繰り返すと 60 行近く同じ名前が並んだ。実測）
       if (entriesT.length || entriesV.length) out.push(`- 入口: 型依存 ${entriesT.length} / 値依存 ${entriesV.length}`);
       /* A_a の既知の部分（公理そのものと、依存が分からないスタブは除く）。
@@ -349,7 +349,7 @@
   const AX_LEGEND = "公理の略号: P = propext, C = Classical.choice, Q = Quot.sound, S! = sorryAx, ? = 不明（範囲外）";
   /* ctx.legend: 公理の略号の凡例をまだ出していなければ、この表の前に一度だけ出す（表ごとに繰り返さない） */
   function depTable(names, st, met, title, note, nm, ctx) {
-    const out = ["", `## ${title}（${names.length} 件。総仮定量 |↓x| の昇順）`, note ? "" + note : ""];
+    const out = ["", `## ${title}（${names.length} 件。下方閉集合の元数 |↓x| の昇順）`, note ? "" + note : ""];
     if (!names.length) { out.push("", "なし"); return out; }
     const sorted = names.slice().sort((a, b) => ((met.closure[a] || 0) - (met.closure[b] || 0)) || (a < b ? -1 : 1));
     if (ctx && ctx.legend) { out.push(AX_LEGEND); ctx.legend = false; }
@@ -454,12 +454,13 @@
         mm.edge(m, p.name, p.via);
       }
       for (const p of prem) seen.add(p.name);
-      /* 前提が無いとき。範囲外の依存（種別不明）があるなら「前提なし」とは言えない（`map_sum` の前提
-         `map_multiset_sum` が範囲外で、語彙に落ちて「前提なし」と出ていた。実測）。
-         定義的等式（証明が反射律だけ）なら、そう言う。 */
+      /* 前提が無いとき。定義的等式（自身の証明が反射律と骨組みだけ）の判定を先にする。反射律 `Iff.rfl` は
+         骨組みとして通り抜けられ、その先の `Iff.refl` が範囲外なので、後にすると「前提は範囲外 1 件」と
+         出る（`scheme_authorized_iff := Iff.rfl` で実測）。範囲外の依存（種別不明）があるなら「前提なし」
+         とは言えない（`map_sum` の前提 `map_multiset_sum` が範囲外で、語彙に落ちて「前提なし」と出ていた。実測）。 */
       if (!prem.length) {
-        if (parts.unknown.length) out.push(pad + `（前提は範囲外 ${parts.unknown.length} 件: ${parts.unknown.map((v) => nm(v.name)).join(", ")} — レポートの範囲外で種別が分からない）`);
-        else if (isDefinitional(m, st)) out.push(pad + "（定義的等式 — 証明は反射律だけ。両辺は主張の語彙の定義を展開すると一致する。確認すべき内容はその定義にある）");
+        if (isDefinitional(m, st)) out.push(pad + "（定義的等式 — 両辺は主張の語彙の定義を展開すると一致する。確認すべき内容はその定義にある）");
+        else if (parts.unknown.length) out.push(pad + `（前提は範囲外 ${parts.unknown.length} 件: ${parts.unknown.map((v) => nm(v.name)).join(", ")} — レポートの範囲外で種別が分からない）`);
         else out.push(pad + "（前提なし — 論理の骨組みだけで閉じている）");
       }
       for (const p of prem) {
@@ -539,7 +540,7 @@
     const mf = G.minimalAndFrontier(Object.keys(down), idx.dep, (n) => !!(st.nodes[n] && st.nodes[n].stub));
     const atoms = mf.trueMinimal.slice().sort();
     const nd0 = st.nodes[name] || {};
-    const out = ["", `## 原子（既知の範囲での min(↓x)。${atoms.length} 件 / 既知の下方閉集合 ${Object.keys(down).length} 件）`, "",
+    const out = ["", `## 原子 min(↓x)（既知の範囲で ${atoms.length} 件 / 既知の下方閉集合 ${Object.keys(down).length} 件）`, "",
       "依存先を持たない宣言。境界の先にも原子はあり得る。"];
     out.push("", atoms.length ? atoms.map((m) => code(nm(m))).join(", ") : "なし（この宣言自身が原始的）");
     if ((nd0.axioms || []).length) out.push("", `公理（依存順序の原子ではない）: ${nd0.axioms.map(code).join(", ")}`);

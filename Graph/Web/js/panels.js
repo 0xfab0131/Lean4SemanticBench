@@ -916,12 +916,12 @@
         <div class="flex items-center gap-2 min-w-0">
           <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-indigo-600 text-white shrink-0" title="グラフの中心。右パネルは選択中の宣言を出す（追従）か、この中心に固定できる">中心</span>
           ${dot(nd.kind, 8)}
-          <span class="font-mono text-[12.5px] font-medium truncate min-w-0" title="${esc(name)}">${esc(name)}</span>
+          <span class="font-mono text-[12.5px] font-medium truncate min-w-0 flex-1" title="${esc(name)}">${esc(name)}</span>
+        </div>
+        <div class="flex items-center gap-1.5 flex-wrap mt-1">
           <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 shrink-0">${kinfo(nd.kind).ja}</span>
           <span class="font-mono text-[9.5px] text-stone-500 shrink-0 whitespace-nowrap" title="${esc(nd.module)}">${esc(shortOf(nd.module))}${nd.line ? ":" + nd.line : ""}</span>
           ${pkgChip(nd)}
-        </div>
-        <div class="flex items-center gap-1.5 flex-wrap mt-1">
           ${markChips(name, nd, dv, false)}
           ${nd.axioms.length
             ? `<span class="text-[10px] text-stone-500">公理</span>${axiomChips(nd, st, false)}`
@@ -975,7 +975,7 @@
 
   /* 推論図を、狭い縦長の面で読める形にする。
 
-       前提   一行一前提で縦に並べる。公理を先に、補題は総仮定量の昇順（原始的なものから）。
+       前提   一行一前提で縦に並べる。公理を先に、補題は下方閉集合の元数 |↓x| の昇順（原始的なものから）。
               行は「▸／★ ・ 名前 ・ 形 ・ 経由（型／証）」、その下に結論を一行（切り詰め。全文は title）。
        開く   ▸ で、その前提の図が字下げと左の縦線で入れ子になる。
        横線   前提の束の直下に一本。右に規則名（この宣言）。
@@ -1064,9 +1064,10 @@
     if (!premises.length) {
       const REFL = new Set(["rfl", "Iff.rfl", "Eq.refl", "HEq.refl", "Iff.refl", "id", "trivial", "True.intro"]);
       const definitional = nd.isProp && (nd.valueDeps || []).every((d) => REFL.has(d) || LDR.roles.isFrameName(d) || ((st.nodes[d] || {}).originRel === "part"));
-      const why = parts.unknown && parts.unknown.length
+      // 定義的等式の判定を先に（`Iff.rfl` を通り抜けた先の `Iff.refl` が範囲外で「前提は範囲外」と出ていた。実測）
+      const why = definitional ? "定義的等式 — 両辺は主張の語彙の定義を展開すると一致する（確認すべき内容はその定義にある）"
+        : parts.unknown && parts.unknown.length
         ? `前提は範囲外 ${parts.unknown.length} 件（${esc(parts.unknown.map((v) => shortOf(v.name)).join(", "))}）— レポートの範囲外で種別が分からない`
-        : definitional ? "定義的等式 — 証明は反射律だけ。両辺は主張の語彙の定義を展開すると一致する（確認すべき内容はその定義にある）"
         : "前提なし — 論理の骨組みだけで閉じている";
       return `<div>
         ${concl}
@@ -1328,7 +1329,7 @@
       };
       // 六つの札が既定の幅（330px）で一行に収まる大きさ（二段に割れていた。実測）
       const mk = (id, label, title) => `<button data-tab="${id}" title="${esc(title || "")}"
-        class="px-1.5 py-1 text-[10.5px] rounded-md whitespace-nowrap ${cur === id
+        class="px-1 py-0.5 text-[10px] rounded-md whitespace-nowrap ${cur === id
           ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900"
           : "text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800"}">${label}</button>`;
       tabs.innerHTML = mk("prev", "プレビュー", "見ている宣言の原文・シグネチャ・導出図") + mk("laws", "法則", "法則の在庫表（関係 × 法則）")
@@ -1336,7 +1337,7 @@
       if (cur === "prev") { renderPreview(st, dv); return; }
       if (cur === "laws") { renderLaws(st); return; }
       const sel = sets[cur] || sets.type;
-      /* 並びは総仮定量の昇順。原始的なものから積み上がる向きに読める。
+      /* 並びは下方閉集合の元数 |↓x| の昇順。原始的なものから積み上がる向きに読める。
          名前順だと、何から出来ているのかの手掛かりにならない。 */
       const met = S.metrics();
       const sorted = sel.list.slice().sort((a, b) =>
@@ -1543,7 +1544,7 @@
       Object.keys(st.nodes).length, dv.center].join("|"), () => {
       // 区切りボタンの内側では折り返さない（「モジュ／ール」と割れた。実測）
       const seg = (id, cur2, opts) => opts.map((o) => `<button data-${id}="${o.v}" title="${esc(o.t || "")}"
-        class="px-2 py-1 text-[12px] rounded-md whitespace-nowrap ${cur2 === o.v
+        class="px-1.5 py-0.5 text-[11.5px] rounded-md whitespace-nowrap ${cur2 === o.v
           ? "bg-white dark:bg-stone-700 shadow-sm text-stone-900 dark:text-stone-100"
           : "text-stone-500 hover:text-stone-800 dark:hover:text-stone-200"}">${o.l}</button>`).join("");
       $("segEdge").innerHTML = seg("edge", st.edgeMode, [{ v: "all", l: "型+値" }, { v: "type", l: "型のみ" }]);
