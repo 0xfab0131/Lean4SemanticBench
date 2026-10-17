@@ -29,7 +29,7 @@
       /* 選択した節点と、中心までの経路・そこから先の系譜の節点は橙の縁。その辺は種類の色・線種のまま太く、
          外の辺・節点は薄くする（以前は経路の辺を太くするだけで、指さないと分からなかった。指摘） */
       /* 選択した節点そのものは水色の蛍光（経路・系譜の橙と一目で別物）。sel は経路・系譜の縁の色 */
-      sel: "#EA580C", selNode: "#67E8F9", selNodeBd: "#0891B2", selTx: "#083344", selDimEdge: 0.16, selDimNode: 0.72,
+      sel: "#EA580C", selNode: "#A5F3FC", selNodeBd: "#06B6D4", selTx: "#1C1917", selDimEdge: 0.16, selDimNode: 0.72,
       badgeBg: "#F5F5F4", badgeTx: "#57534E",
       muted: "#A8A29E", faint: "#57534E",
       panel: "rgba(255,255,255,.86)", panelBd: "#E7E5E4",
@@ -42,7 +42,7 @@
       minBg: "#451A03", minBd: "#D97706", minTx: "#FDE68A",
       sorryBg: "#4C0519", sorryBd: "#F43F5E", sorryTx: "#FECDD3",
       trace: "#F59E0B",
-      sel: "#F97316", selNode: "#22D3EE", selNodeBd: "#A5F3FC", selTx: "#083344", selDimEdge: 0.18, selDimNode: 0.72,
+      sel: "#F97316", selNode: "#0E7490", selNodeBd: "#67E8F9", selTx: "#ECFEFF", selDimEdge: 0.18, selDimNode: 0.72,
       badgeBg: "#292524", badgeTx: "#A8A29E",
       muted: "#78716C", faint: "#D6D3D1",
       panel: "rgba(28,25,23,.86)", panelBd: "#292524",
@@ -357,7 +357,7 @@
            「どれを選んだか」を一目で分ける。橙の塗りでは系譜の橙の縁と紛れた。指摘）。系譜の節点は縁だけ橙 */
         pp.fill(isSel ? c.selNode : stl.bg);
         pp.stroke(isSel ? c.selNodeBd : onPath ? c.sel : isHov ? CONE[a.cone].wash : (pkgC || stl.bd));
-        pp.strokeWeight((isSel ? 2 : onPath ? 2.2 : isHov ? 2 : pkgC ? 1.6 : 1.1) / k);
+        pp.strokeWeight((isSel ? 2.6 : onPath ? 2.2 : isHov ? 2 : pkgC ? 1.6 : 1.1) / k);
         pp.rect(a.x - w / 2, a.y - h / 2, w, h, stl.pill ? h / 2 : 9);
         if (isSel) {   // 選択の輪（外側にもう一本、同じ水色）。密な層でも見失わない
           pp.noFill(); pp.stroke(c.selNodeBd); pp.strokeWeight(1.6 / k);
@@ -372,15 +372,16 @@
         const fc = st.granularity === "decl" && dv.facetCount ? (dv.facetCount[n] || 0) : 0;
         const badgeW = fc ? 24 : 0;
         pp.noStroke(); pp.fill(dotC);
-        if (isSel) { pp.stroke(c.selTx); pp.strokeWeight(1 / k); }   // 水色の地でも種別の点が見えるよう濃い色で縁取る
         if (w < 78) {
           pp.circle(a.x, a.y, 9);
         } else {
           pp.circle(a.x - w / 2 + 14, a.y, 8);
-          pp.noStroke();
+          /* 選択した節点の名前は、薄い水色の地に濃い字を太字で（水色の地に紺の細字は潰れて読めなかった。指摘） */
           pp.fill(isSel ? c.selTx : stl.tx); pp.textSize(13);
+          if (isSel) pp.textStyle(pp.BOLD);
           pp.textAlign(pp.LEFT, pp.CENTER);
           pp.text(fit(pp, (dv.labels && dv.labels[n]) || n, w - 32 - badgeW), a.x - w / 2 + 24, a.y + 0.5);
+          if (isSel) pp.textStyle(pp.NORMAL);
         }
 
         // 展開バッジは半径方向の外側。ノード幅が細っても必ず押せる。
