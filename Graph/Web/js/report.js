@@ -84,7 +84,9 @@
     "- 形: 六角 `{{ }}` 公理 / 四角 `[ ]` 命題（定理・補題）/ 角丸 `( )` 定義・型 / 平行四辺形 `[/ /]` 範囲外（依存が分からない）/ 二重枠 `[[ ]]` 名前空間の束",
     "- 辺: 実線 `-->` 主張（型）に現れる / 点線 `-.->` 証明（値）にだけ現れる / 太線 `==>` 最短の道筋 / 数字の札 = 束ねた辺の本数",
     "- 枠: 太枠 = 主語 / 破線 = 深さの先にまだ前提がある / 橙 = 境界で切れた宣言（公理を持つが、それを持つ依存先が全て範囲外。極小元ではない）/ 赤 = sorry を含む / 灰 = 論理の骨組み・断片",
-    "- 公理の流入の図では、節点の札 `[P C Q]` がその宣言の持つ公理（略号は依存の表と同じ）。六角（公理）への辺は、公理を直接使う宣言からだけ引く",
+    "- 節点の札 `[P C Q]` はその宣言の持つ公理（略号は依存の表と同じ。導出図・構成図・公理の流入で共通）。公理の流入の図では、六角（公理）への辺は公理を直接使う宣言からだけ引く",
+    "- 囲み: 導出図・構成図ではパッケージ（グラフの「束ね = パッケージ」と同じ）、経路の図では層 ℓ",
+    "- 基盤の図は二部関係（対象側の宣言 → 外の宣言の名前空間の束）。実線 = 主張が立脚する宣言を含む束、点線 = 証明が持ち込んだものだけ",
     "- 経路の図は順序区間の推移簡約（Hasse 図）。推移で導ける辺は引かず、最短の道筋だけは太線で残す。直接の辺の全列挙は本文"];
   /* 推移簡約: 辺 u → v は、u の別の直接依存 w から v に到達できるなら引かない（順序は保たれる）。
      到達集合は記憶化の再帰で取る。巡回（整礎再帰の補助定義）があれば部分的な集合で近似する。 */
@@ -201,8 +203,34 @@
     }
   }
 
+  /* ---- 既知の範囲での |↓x ∩ K| ----
+     原子・境界・計量と同じ索引（断片を由来に埋め戻したもの）で数える。表の並びと前提の脚注に使うので
+     記憶化する（表の行 × 閉包の大きさ。cslib で 50 行 × 1300 節点程度）。 */
+  function kSizeOf(ctx, n) {
+    if (!ctx.ksz.has(n)) {
+      const idx = ctx.dv.inlinedIdx || ctx.dv.declIdx;
+      ctx.ksz.set(n, Object.keys(G.reachable(n, idx.dep, 64)).length);
+    }
+    return ctx.ksz.get(n);
+  }
+  /* 判断  仮定 ⊢ 結論（sig.sequentText。右パネルの前提の行と同じ部品）。short なら型を末尾二成分に畳む */
+  const judg = (nd, short) => sig.sequentText(nd, short);
+  /* 宣言の脚注: 公理の略号・|↓x ∩ K|・大きさ・インスタンス要求・出どころ。前提の行と構成図の材料に添える
+     （右パネルの前提の行の脚注と同じ事実） */
+  function footnote(n, nd, ctx) {
+    const ax = (nd.axioms || []).map((a) => AX_SHORT[a] || a).join(" ");
+    const bits = [
+      nd.stub ? "範囲外（依存が分からない）" : ax ? `公理 ${ax}` : (nd.kind === "axiom" ? "" : "公理非依存"),
+      nd.stub ? "" : `|↓| ${kSizeOf(ctx, n)}`,
+      nd.typeSize || nd.valueSize ? `型 ${nd.typeSize || 0} / 証明 ${nd.valueSize || 0}` : "",
+      nd.numInst ? `インスタンス ${nd.numInst}` : "",
+      pkgOf(nd) || "",
+    ].filter(Boolean);
+    return bits.join(" · ");
+  }
+
   /* ---- 章 ---- */
-  function headerLines(name, nd, st, nm) {
+  function headerLines(name, nd, st, dv, nm) {
     const out = [];
     out.push(`# ${u(name)}`);
     const bits = [kindJa(nd.kind), whereOf(nd), pkgOf(nd) ? `パッケージ ${pkgOf(nd)}` : ""].filter(Boolean);
@@ -216,6 +244,27 @@
     out.push(`公理（現状の証明項に基づく）: ${nd.axioms && nd.axioms.length ? nd.axioms.join(", ") : "なし（公理非依存）"}   sorry: ${nd.usesSorry ? "あり" : "なし"}`
       + (nd.isProp && nd.shape && sig.SHAPE[nd.shape] ? `   法則の形: ${sig.SHAPE[nd.shape].ja}（${nd.shapeRel ? nm(nd.shapeRel) : ""}${nd.shapeType ? " @ " + nm(nd.shapeType) : ""}）` : "")
       + (nd.numHyp || nd.numInst ? `   条件: 仮定 ${nd.numHyp} / インスタンス ${nd.numInst}` : "   無条件"));
+    /* 印（右パネルの「印」「数値」と同じ）: instance / reducible / 派生・断片の数 / 主題 / 宇宙変数 */
+    const fc = (dv.facetCount || {})[name] || 0, pc = (dv.partCount || {})[name] || 0;
+    const marks = [
+      nd.isInstance ? "instance（型クラスのインスタンスとして登録）" : "",
+      nd.reducibility === "reducible" ? "reducible（abbrev 等）" : "",
+      fc ? `派生 ${fc}（この宣言から Lean が作った宣言）` : "",
+      pc ? `断片 ${pc}（証明・本体から切り出された補助。由来に埋め戻して数える）` : "",
+      nd.subject ? `主題 ${code(nm(nd.subject))}` : "",
+      nd.numUniverse ? `宇宙変数 ${nd.numUniverse}` : "",
+    ].filter(Boolean);
+    if (marks.length) out.push(`印: ${marks.join(" · ")}`);
+    /* 依存先のパッケージ（右パネルの「依存先」）: 直接依存の定義モジュールをパッケージごとに。モジュールも全て挙げる */
+    if (P && nd.depModules && nd.depModules.length) {
+      const sum = P.summarize(nd.depModules);
+      const tp = pkgOf(nd);
+      const keys = Object.keys(sum).sort((a, b) => (P.labelOf(a) === tp ? -1 : P.labelOf(b) === tp ? 1 : sum[b].n - sum[a].n));
+      if (keys.length) {
+        out.push(`依存先のパッケージ（直接依存の定義モジュール）: ${keys.map((p) => `${P.labelOf(p)} ${sum[p].n}`).join(" · ")}`);
+        for (const p of keys) out.push(`- ${P.labelOf(p)}: ${sum[p].modules.slice().sort().map(code).join(", ")}`);
+      }
+    }
     if (nd.docString) out.push("", nd.docString.trim());
     return out;
   }
@@ -340,7 +389,10 @@
     } else if (nd.conclusion) {
       out.push(`型: ${nd.conclusion}`);
     }
-    if (!nd.source && nd.typeString) out.push("", "型（Lean の表示）: " + code(nd.typeString));
+    // 判断の形（導出図の前提の行と同じ読み方）。命題のときだけ
+    if (nd.isProp && (nd.binders || []).length) out.push(`判断: ${judg(nd, false)}`);
+    // Lean の表示（∀ の連鎖・完全修飾名）。原文があっても、原文と Lean の読みの差（省略・記法）を見るために出す
+    if (nd.typeString) out.push("", "型（Lean の表示）: " + code(nd.typeString));
     return out;
   }
 
@@ -348,12 +400,15 @@
   const AX_SHORT = { propext: "P", "Classical.choice": "C", "Quot.sound": "Q", sorryAx: "S!" };
   const AX_LEGEND = "公理の略号: P = propext, C = Classical.choice, Q = Quot.sound, S! = sorryAx, ? = 不明（範囲外）";
   /* ctx.legend: 公理の略号の凡例をまだ出していなければ、この表の前に一度だけ出す（表ごとに繰り返さない） */
+  /* 列は右パネルの依存の一覧と同じ事実: 種別・出どころ・役割・法則の形・条件（仮定/インスタンス）・公理・
+     |↓x ∩ K|（並びの鍵。以前は並べるだけで値を出していなかった）・判断（仮定 ⊢ 結論。定義は型） */
   function depTable(names, st, met, title, note, nm, ctx) {
-    const out = ["", `## ${title}（${names.length} 件。下方閉集合の元数 |↓x| の昇順）`, note ? "" + note : ""];
+    const out = ["", `## ${title}（${names.length} 件。既知の範囲での下方閉集合の元数 |↓x ∩ K| の昇順）`, note ? "" + note : ""];
     if (!names.length) { out.push("", "なし"); return out; }
-    const sorted = names.slice().sort((a, b) => ((met.closure[a] || 0) - (met.closure[b] || 0)) || (a < b ? -1 : 1));
+    const ks = (n) => kSizeOf(ctx, n);
+    const sorted = names.slice().sort((a, b) => (ks(a) - ks(b)) || (a < b ? -1 : 1));
     if (ctx && ctx.legend) { out.push(AX_LEGEND); ctx.legend = false; }
-    out.push("", "| 宣言 | 種別 | 出どころ | 役割 | 公理 | 結論・型 |", "|---|---|---|---|---|---|");
+    out.push("", "| 宣言 | 種別 | 出どころ | 役割 | 形 | 仮定/inst | 公理 | \\|↓x∩K\\| | 判断・型 |", "|---|---|---|---|---|---|---|---|---|");
     const OK = sig.ORIGIN_KIND, OR = sig.ORIGIN_REL;
     for (const n of sorted) {
       const nd = st.nodes[n] || {};
@@ -361,7 +416,10 @@
       const roleJa = (R.ROLE[role] || {}).ja || role;
       const via = nd.originRel && nd.origin ? `${roleJa}（${nm(nd.origin)} の${(OR[nd.originRel] || {}).ja}: ${(OK[nd.originKind] || {}).ja || nd.originKind}）` : roleJa;
       const ax = nd.stub ? "？" : (nd.axioms || []).map((a) => AX_SHORT[a] || a).join(" ") || "—";
-      out.push(`| ${code(nm(n))} | ${kindJa(nd.kind)} | ${pkgOf(nd) || "—"} | ${cell(via)} | ${ax} | ${cell(sig.abbrev(concl(nd))) || "—"} |`);
+      const sh = nd.isProp && nd.shape && sig.SHAPE[nd.shape] ? sig.SHAPE[nd.shape].ja : "—";
+      const cond = nd.stub ? "？" : (nd.numHyp || nd.numInst) ? `${nd.numHyp || 0}/${nd.numInst || 0}` : "—";
+      const jd = nd.stub ? "—" : nd.isProp ? judg(nd, true) : (sig.abbrev(concl(nd)) || "—");
+      out.push(`| ${code(nm(n))}${nd.usesSorry ? " (sorry)" : ""} | ${kindJa(nd.kind)} | ${pkgOf(nd) || "—"} | ${cell(via)} | ${sh} | ${cond} | ${ax} | ${nd.stub ? "—" : ks(n)} | ${cell(jd)} |`);
     }
     return out;
   }
@@ -374,9 +432,10 @@
   const REFL = new Set(["rfl", "Iff.rfl", "Eq.refl", "HEq.refl", "Iff.refl", "id", "trivial", "True.intro"]);
   function isDefinitional(n, st) {
     const nd = st.nodes[n] || {};
-    if (!nd.isProp) return false;
+    if (!nd.isProp || nd.kind === "axiom") return false;
     const vd = nd.valueDeps || [];
-    return vd.every((d) => REFL.has(d) || R.isFrameName(d) || ((st.nodes[d] || {}).originRel === "part"));
+    // 証明が空の宣言（公理、`fun h => h` のように定数を参照しない証明）は定義的等式ではない
+    return vd.length > 0 && vd.every((d) => REFL.has(d) || R.isFrameName(d) || ((st.nodes[d] || {}).originRel === "part"));
   }
 
   /* 深さの先に前提（補題・公理。構成図なら語彙も）が続くか。図の破線枠（more）に使う */
@@ -387,15 +446,29 @@
     return p.axiom.length + p.lemma.length + (withVocab ? p.vocab.length : 0) > 0;
   };
 
-  function constructionSection(name, st, depth, met, nm, fx) {
-    const out = ["", `## 構成図（深さ ${depth}。○ 定義・型 / • 補題 / ★ 公理。[型] 型に現れる / [証] 本体にだけ現れる）`, "", "```"];
+  /* 図の節点の札: 名前と、その宣言が持つ公理の略号 `[P C]`（公理の流入の図と同じ約束）。
+     図の囲み: パッケージ（グラフの「束ね = パッケージ」と同じ。どの前提が Mathlib / cslib / core から来るか） */
+  const axLabel = (nd) => { const l = (nd.axioms || []).map((a) => AX_SHORT[a] || a); return l.length ? ` [${l.join(" ")}]` : ""; };
+  function packageSubgraphs(mm, names, st) {
+    const by = new Map();
+    for (const n of names) {
+      const p = pkgOf(st.nodes[n]) || "（範囲外）";
+      (by.get(p) || by.set(p, []).get(p)).push(n);
+    }
+    for (const [p, ns] of by) mm.subgraph("P" + [...by.keys()].indexOf(p), `パッケージ ${p}`, ns);
+  }
+
+  function constructionSection(name, st, depth, met, nm, fx, ctx) {
+    const out = ["", `## 構成図（深さ ${depth}。○ 定義・型 / • 補題 / ★ 公理。[型] 型に現れる / [証] 本体にだけ現れる。各材料の下に判断（補題は 仮定 ⊢ 結論）と脚注）`, "", "```"];
     const seen = new Set([name]);
-    const byClosure = (a, b) => ((met.closure[a.name] || 0) - (met.closure[b.name] || 0)) || (a.name < b.name ? -1 : 1);
+    const byClosure = (a, b) => (kSizeOf(ctx, a.name) - kSizeOf(ctx, b.name)) || (a.name < b.name ? -1 : 1);
     const nd0 = st.nodes[name] || {};
+    const short = nm !== u;
     out.push(`${nm(name)} : ${sig.abbrev(concl(nd0)) || "—"}`);
     // 図は同じ走査で組む。既出の材料も辺は引く（木では二本目の辺が消える。図では DAG として残る）
     const mm = fx.on ? mermaidBuilder() : null;
-    if (mm) declNode(mm, name, st, nm, ["root"]);
+    const figNames = [name];
+    if (mm) declNode(mm, name, st, nm, ["root"], nm(name) + axLabel(nd0));
     const walk = (m, d, prefix) => {
       const parts = R.split(m, st.nodes);
       const kids = [...parts.axiom, ...parts.lemma, ...parts.vocab].sort(byClosure);
@@ -405,10 +478,19 @@
         const role = R.roleOf(k.name, x);
         const mark = role === "axiom" ? "★" : role === "lemma" ? "•" : "○";
         const dup = seen.has(k.name);
-        out.push(`${prefix}${last ? "└─ " : "├─ "}${mark} ${nm(k.name)} [${k.via === "type" ? "型" : "証"}]${x.usesSorry ? " (sorry)" : ""} : ${sig.abbrev(concl(x)) || kindJa(x.kind)}${dup ? "  （既出）" : ""}`);
+        const sub = prefix + (last ? "   " : "│  ") + "    ";
+        out.push(`${prefix}${last ? "└─ " : "├─ "}${mark} ${nm(k.name)} [${k.via === "type" ? "型" : "証"}]${x.usesSorry ? " (sorry)" : ""}${dup ? "  （既出）" : ""}`);
+        if (!dup) {
+          const s = sig.sequent(x, short);
+          if (s.args) out.push(sub + s.args);
+          out.push(sub + (x.isProp ? judg(x, short) : (": " + (short ? sig.abbrev(concl(x)) : concl(x)) || kindJa(x.kind))));
+          const f = footnote(k.name, x, ctx);
+          if (f) out.push(sub + f);
+        }
         const descend = d > 1 && ((x.typeDeps || []).length + (x.valueDeps || []).length) > 0 && !x.stub;
         if (mm) {
-          declNode(mm, k.name, st, nm, !dup && !descend && hasMore(k.name, st, true) ? ["more"] : []);
+          if (!mm.has(k.name)) figNames.push(k.name);
+          declNode(mm, k.name, st, nm, !dup && !descend && hasMore(k.name, st, true) ? ["more"] : [], nm(k.name) + axLabel(x));
           mm.edge(m, k.name, k.via);
         }
         if (dup) return;
@@ -417,6 +499,7 @@
       });
     };
     walk(name, depth, "");
+    if (mm) packageSubgraphs(mm, figNames, st);
     // 配管・範囲外・骨組み・断片は木に入れず、根について件数と名前だけ（配管を木に入れると材料が埋もれる）
     const p0 = R.split(name, st.nodes);
     const foot = [];
@@ -427,20 +510,22 @@
     for (const f of foot) out.push("    " + f);
     out.push("```");
     // 材料が無ければ図は積まない（節点一つの図に意味は無い）
-    if (mm && mm.size().edges) addFigure(fx, mm, `構成図（深さ ${depth}。既出の材料への辺も引く）`, "構成図");
+    if (mm && mm.size().edges) addFigure(fx, mm, `構成図（深さ ${depth}。既出の材料への辺も引く。札 [P C Q] はその宣言の持つ公理、囲みはパッケージ）`, "構成図");
     return out;
   }
 
   /* 導出図の文章版。前提を一行一前提で、深さ分だけ入れ子に。公理は ★。同じ宣言は初出だけ展開する。
      図は前提（補題・公理）の関係だけ（語彙は脚注のまま）。文章では初出の親の下にしか現れない共有の前提も、
      図では二本目以降の辺を引く。 */
-  function figureSection(name, st, depth, met, nm, fx) {
-    if (!(st.nodes[name] || {}).isProp) return constructionSection(name, st, depth, met, nm, fx);
-    const out = ["", `## 導出図（深さ ${depth}。前提は横線の上、結論は下。★ 公理。[型] 主張に現れる / [証] 証明にだけ現れる）`, ""];
+  function figureSection(name, st, depth, met, nm, fx, ctx) {
+    if (!(st.nodes[name] || {}).isProp) return constructionSection(name, st, depth, met, nm, fx, ctx);
+    const out = ["", `## 導出図（深さ ${depth}。前提は横線の上、結論は下。★ 公理。[型] 主張に現れる / [証] 証明にだけ現れる。各前提の下にデータ引数・判断（仮定 ⊢ 結論）・脚注（公理の略号・|↓x ∩ K|・大きさ・出どころ））`, ""];
     const seen = new Set([name]);
-    const byClosure = (a, b) => ((met.closure[a.name] || 0) - (met.closure[b.name] || 0)) || (a.name < b.name ? -1 : 1);
+    const byClosure = (a, b) => (kSizeOf(ctx, a.name) - kSizeOf(ctx, b.name)) || (a.name < b.name ? -1 : 1);
+    const short = nm !== u;
     const mm = fx.on ? mermaidBuilder() : null;
-    if (mm) declNode(mm, name, st, nm, ["root"]);
+    const figNames = [name];
+    if (mm) declNode(mm, name, st, nm, ["root"], nm(name) + axLabel(st.nodes[name] || {}));
     const fig = (m, d, ind) => {
       const pad = " ".repeat(ind);
       const nd = st.nodes[m] || {};
@@ -450,7 +535,8 @@
       if (mm) for (const p of all) {
         const x = st.nodes[p.name] || {};
         const descend = d > 1 && ((x.typeDeps || []).length + (x.valueDeps || []).length) > 0;
-        declNode(mm, p.name, st, nm, !seen.has(p.name) && !descend && hasMore(p.name, st, false) ? ["more"] : []);
+        if (!mm.has(p.name)) figNames.push(p.name);
+        declNode(mm, p.name, st, nm, !seen.has(p.name) && !descend && hasMore(p.name, st, false) ? ["more"] : [], nm(p.name) + axLabel(x));
         mm.edge(m, p.name, p.via);
       }
       for (const p of prem) seen.add(p.name);
@@ -459,7 +545,8 @@
          出る（`scheme_authorized_iff := Iff.rfl` で実測）。範囲外の依存（種別不明）があるなら「前提なし」
          とは言えない（`map_sum` の前提 `map_multiset_sum` が範囲外で、語彙に落ちて「前提なし」と出ていた。実測）。 */
       if (!prem.length) {
-        if (isDefinitional(m, st)) out.push(pad + "（定義的等式 — 両辺は主張の語彙の定義を展開すると一致する。確認すべき内容はその定義にある）");
+        if (nd.kind === "axiom") out.push(pad + "（公理 — これ以上遡れない仮定。前提は無い）");
+        else if (isDefinitional(m, st)) out.push(pad + "（定義的等式 — 両辺は主張の語彙の定義を展開すると一致する。確認すべき内容はその定義にある）");
         else if (parts.unknown.length) out.push(pad + `（前提は範囲外 ${parts.unknown.length} 件: ${parts.unknown.map((v) => nm(v.name)).join(", ")} — レポートの範囲外で種別が分からない）`);
         else out.push(pad + "（前提なし — 論理の骨組みだけで閉じている）");
       }
@@ -469,13 +556,20 @@
         const sh = x.isProp && x.shape && sig.SHAPE[x.shape] ? ` [${sig.SHAPE[x.shape].ja}]` : "";
         const descend = d > 1 && ((x.typeDeps || []).length + (x.valueDeps || []).length) > 0;
         out.push(pad + `${role === "axiom" ? "★ " : "• "}${nm(p.name)}${sh} [${p.via === "type" ? "型" : "証"}]${x.usesSorry ? " (sorry)" : ""}`);
-        // 開く前提は入れ子の図の横線の下に同じ結論が出るので、ここでは出さない（二度書いていた。実測）
-        const c = concl(x);
-        if (c && !descend) out.push(pad + "    ⊢ " + sig.abbrev(c));
+        /* 前提の論理: データ引数 / 判断  仮定 ⊢ 結論 / 脚注。以前は結論だけ（`propext  ⊢ a = b`）で、
+           何から何を得る規則か（`a ↔ b ⊢ a = b`）が読めなかった（右パネルへの指摘と同じ）。
+           開く前提は入れ子の図の横線の下に同じ判断が出るので、判断はここでは出さない（二度書いていた。実測） */
+        const s = sig.sequent(x, short);
+        if (s.args) out.push(pad + "    " + s.args);
+        if (!descend) out.push(pad + "    " + judg(x, short));
+        const f = footnote(p.name, x, ctx);
+        if (f) out.push(pad + "    " + f);
         if (descend) fig(p.name, d - 1, ind + 4);
       }
       out.push(pad + "─".repeat(Math.max(24, 60 - ind)) + " " + nm(m));
-      out.push(pad + "⊢ " + (sig.abbrev(concl(nd)) || "—"));
+      // 横線の下は判断（仮定 ⊢ 結論）。入れ子ではデータ引数も添える（最上位は「主張」の節にある）
+      if (ind) { const s0 = sig.sequent(nd, short); if (s0.args) out.push(pad + s0.args); }
+      out.push(pad + judg(nd, short));
       const foot = [];
       if (parts.vocab.length) foot.push(`語彙 ${parts.vocab.length}: ${parts.vocab.map((v) => nm(v.name)).join(", ")}`);
       if (parts.plumbing.length) foot.push(`配管 ${parts.plumbing.length}（射影・インスタンス・構成子）: ${parts.plumbing.map((v) => nm(v.name)).join(", ")}`);
@@ -488,7 +582,10 @@
     fig(name, depth, 0);
     out.push("```");
     // 前提が無ければ図は積まない（`Iff.rfl` で閉じる定理で節点一つの図を実測）
-    if (mm && mm.size().edges) addFigure(fx, mm, `導出図（深さ ${depth}。前提の補題・公理だけ。共有された前提への辺も引く）`, "導出図");
+    if (mm && mm.size().edges) {
+      packageSubgraphs(mm, figNames, st);
+      addFigure(fx, mm, `導出図（深さ ${depth}。前提の補題・公理だけ。共有された前提への辺も引く。札 [P C Q] はその前提の持つ公理、囲みはパッケージ）`, "導出図");
+    }
     return out;
   }
 
@@ -503,7 +600,7 @@
      型・構造体／定義／補題／配管 に分け、多重度（使う対象側の宣言）と、主張が立脚するか（型依存だけの
      閉包から出る）証明が持ち込んだかを添える。対象の依存は全て外部一段として既知なので、この集合は
      読み込んだ範囲の切れ目に依存しない（正確）。原子と公理は別の節（atomsSection）。 */
-  function foundationSection(name, st, dv, nm) {
+  function foundationSection(name, st, dv, nm, fx) {
     const { idx } = downSet(name, dv);
     const inT = (n) => !!st.nodes[n] && !st.nodes[n].external;
     const fd = G.foundation(name, idx.dep, (dv.inlinedTypeIdx || idx).dep, inT);
@@ -527,6 +624,47 @@
       }
     }
     if (!fd.list.length) out.push("", "対象の閉包は外へ出ない（対象の中で閉じている）。");
+    /* 図: 二部関係 { (y, z) : y ∈ ↓x ∩ T, z ∈ ∂_T x, y → z }。左 = 対象側の宣言 y（段数）、右 = 外の宣言 z を
+       名前空間で束ねたもの（k 成分。上限に収まる最大）。辺は実線 = その束に主張が立脚する z がある、
+       点線 = 証明が持ち込んだ z だけ。札 = 束ねた辺の本数。グラフの基盤の区画（チップ）には無い
+       「どの対象側の宣言が、外の何を使うか」の対応がここで読める（cslib で 384 件を名前空間 40 束に実測）。 */
+    if (fx && fx.on && fd.list.length) {
+      const usersOf = new Map();                       // y → [z…]
+      for (const e of fd.list) for (const y of e.users) (usersOf.get(y) || usersOf.set(y, []).get(y)).push(e);
+      const nsOf = (n, k) => { const p = u(n).split(".").slice(0, -1); return !p.length ? "（名前空間なし）" : k === Infinity ? p.join(".") : p.slice(0, k).join("."); };
+      const kDesc = (k) => (k === Infinity ? "完全な名前空間" : `先頭 ${k} 成分`);
+      /* 右（外）を名前空間 kR 成分で束ね、それでも上限を超えれば左（対象側）も名前空間 kL 成分で束ねる
+         （cslib の定理で実測: 対象側 43 件 × 外 40 束で 641 辺。左も束ねて初めて上限に入る）。
+         kL = null は「左は宣言のまま」 */
+      let chosen = null;
+      const tryBundle = (kL, kR) => {
+        const left = new Map(), right = new Map(), pairs = new Map();
+        for (const [y, es] of usersOf) {
+          const L = kL === null ? y : nsOf(y, kL);
+          (left.get(L) || left.set(L, new Set()).get(L)).add(y);
+          for (const e of es) {
+            const Rn = nsOf(e.name, kR);
+            (right.get(Rn) || right.set(Rn, new Set()).get(Rn)).add(e.name);
+            const key = L + "\u0000" + Rn;
+            const c = pairs.get(key) || pairs.set(key, { L, R: Rn, n: 0, stmt: 0 }).get(key);
+            c.n++; if (e.inStatement) c.stmt++;
+          }
+        }
+        return { kL, kR, left, right, pairs, fits: left.size + right.size <= FIG_MAX.nodes && pairs.size <= FIG_MAX.edges };
+      };
+      const plan = [];
+      for (const kR of [Infinity, 3, 2, 1]) plan.push([null, kR]);
+      for (const kL of [Infinity, 3, 2, 1]) for (const kR of [3, 2, 1]) plan.push([kL, kR]);
+      for (const [kL, kR] of plan) { const t = tryBundle(kL, kR); if (t.fits) { chosen = t; break; } }
+      if (!chosen) chosen = tryBundle(1, 1);
+      const mm = mermaidBuilder();
+      const hop = G.reachable(name, idx.dep, 64);
+      if (chosen.kL === null) for (const y of usersOf.keys()) declNode(mm, y, st, nm, y === name ? ["root"] : [], `${nm(y)} (${hop[y] ?? "?"})`);
+      else for (const [L, set] of chosen.left) mm.node("K:" + L, `${L}（対象側 ${set.size}）`, "bundle", ["bundle"].concat(set.has(name) ? ["root"] : []));
+      for (const [Rn, set] of chosen.right) mm.node("B:" + Rn, `${Rn}（外 ${set.size}）`, "bundle", ["bundle"]);
+      for (const c of chosen.pairs.values()) mm.edge(chosen.kL === null ? c.L : "K:" + c.L, "B:" + c.R, c.stmt ? "type" : "value", c.n > 1 ? String(c.n) : "");
+      if (mm.size().edges) addFigure(fx, mm, `基盤 ∂_T x。左は対象側の宣言${chosen.kL === null ? "（括弧は中心からの段数）" : `を名前空間（${kDesc(chosen.kL)}）で束ねたもの（太枠は主語を含む束）`}、右は外の宣言を名前空間（${kDesc(chosen.kR)}）で束ねたもの。実線 = 主張が立脚する宣言を含む、点線 = 証明が持ち込んだものだけ。札は辺の本数`, "基盤");
+    }
     return out;
   }
 
@@ -792,7 +930,8 @@
     "- 既知の範囲 K = 対象＋内部補助＋外部一段。依存グラフは対象の外を一段しか持たないので、|↓x ∩ K|・深さ・原子・境界は K の中での値（下界・不完全）。公理集合と基盤は切れ目に依存しない。",
     "- 基盤 ∂_T x = 対象（レポートの対象＋内部補助）の閉包から外へ出る辺の先（正確）。原子 = K の中で依存先を持たない宣言と公理（境界の先にも原子はあり得る）。境界 ∂x = ↓x ∖ K。レポートの範囲外で依存が続く宣言で、極小元ではない（既知の構造体の成員と注釈は数えない）。",
     "- 公理の由来の「直接使う宣言」は公理が deps に在る宣言（全環境でもそこで入る）。「境界で切れた宣言」は公理を持つがそれを持つ依存先が全て範囲外の宣言で、極小元ではない。",
-    "- 導出図は論理の骨組み（And.intro / Eq.mpr …）と断片（_proof_<i>）を通り抜けて前提を拾う。",
+    "- 導出図は論理の骨組み（And.intro / Eq.mpr …）と断片（_proof_<i>）を通り抜けて前提を拾う。各前提は判断  仮定 ⊢ 結論（データ引数は上の行）で書き、脚注に持ち込む公理の略号・|↓x ∩ K|・主張と証明の大きさ・インスタンス要求・出どころを添える（右パネルの前提の行と同じ事実）。",
+    "- 依存の表の |↓x ∩ K| と前提の脚注の |↓| は、計量の節と同じ索引（断片を由来に埋め戻したもの）で数えた既知の範囲での値。",
     "- 順序区間 [s, c] = ↑s ∩ ↓c。ℓ は上端からの最長導出鎖の長さ。",
     "- 付録の図は本文の各節と同じ事実を Mermaid の flowchart で描いたもの（記法は付録の頭）。描けない環境では本文を読む。",
   ];
@@ -813,7 +952,8 @@
     const fullNames = o.fullNames !== false, edgeList = o.edgeList !== false;
     const nm = fullNames ? u : sig.shortName;
     const fx = { on: sections.has("figures"), figs: [] };    // 図を積む入れ物（付録でまとめて出す）
-    const ctx = { legend: true };                             // 公理の略号の凡例は最初の表に一度だけ
+    // 公理の略号の凡例は最初の表に一度だけ。ksz は |↓x ∩ K| の記憶化（表の並びと脚注）
+    const ctx = { legend: true, dv, ksz: new Map() };
     const center = dv.center;
     let subject, label;
     if (kind === "selected") { subject = st.selected && st.selected !== center ? st.selected : null; label = "選択"; }
@@ -827,15 +967,15 @@
     const nd = st.nodes[subject];
     const met = S.metrics();
     const out = [];
-    out.push(...headerLines(subject, nd, st, nm));
+    out.push(...headerLines(subject, nd, st, dv, nm));
     out.push("", `主語: ${label}${subject !== center ? `（グラフの中心は ${code(nm(center))}）` : "（グラフの中心）"}`);
     if (sections.has("claim")) out.push(...claimSection(nd));
     if (sections.has("path") && kind !== "center") out.push(...pathSection(subject, center, st, dv, nm, edgeList, fx));
     if (sections.has("type")) out.push(...depTable(nd.typeDeps || [], st, met, "型依存", `${code(nm(subject))} の主張（型）に現れる宣言。この宣言が何を述べているかを決める。`, nm, ctx));
     if (sections.has("value")) out.push(...depTable(nd.valueDeps || [], st, met, "値依存", `${code(nm(subject))} の証明（値）にだけ現れる宣言。定理ならカーネル検査済み。`, nm, ctx));
     if (sections.has("axioms")) out.push(...axiomsSection(subject, st, dv, met, nm, fx));
-    if (sections.has("figure")) out.push(...figureSection(subject, st, depth, met, nm, fx));
-    if (sections.has("foundation")) out.push(...foundationSection(subject, st, dv, nm));
+    if (sections.has("figure")) out.push(...figureSection(subject, st, depth, met, nm, fx, ctx));
+    if (sections.has("foundation")) out.push(...foundationSection(subject, st, dv, nm, fx));
     if (sections.has("atoms")) out.push(...atomsSection(subject, st, dv, nm));
     if (sections.has("frontier")) out.push(...frontierSection(subject, st, dv, nm, fx));
     if (sections.has("refs")) out.push(...refsSection(subject, st, dv, met, nm, ctx));

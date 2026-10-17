@@ -358,20 +358,27 @@
      「基本の深さまでは自動で開き、その先は利用者がノード単位で開く」方式。
        n が open ⟺ hop(n) < baseDepth または n ∈ expanded
      closedFrontier[n] は「n を開いたら新たに何件見えるか」。 */
-  function visibleClosure(root, adj, baseDepth, expanded) {
+  /* through: 経路のためにだけ開く節点の集合（経路表示の最短路上の節点）。through のためにだけ開いた節点は、
+     through に入る子だけを見せる。以前は区間の全節点を expanded と同じ扱いで開き、開いた節点の子を
+     **全て** 見せていたので、区間 100 節点 × 各 50 の依存で図が爆発した（cslib の `Polynomial` への
+     経路表示で ℓ18・数百節点を実測）。見せなかった子の数は closedFrontier に入れ、+n で開ける。 */
+  function visibleClosure(root, adj, baseDepth, expanded, through) {
     const hop = {}; hop[root] = 0;
     const order = [root];
-    const isOpen = (n) => hop[n] < baseDepth || expanded.has(n);
+    const byDepth = (n) => hop[n] < baseDepth || expanded.has(n);
+    const isOpen = (n) => byDepth(n) || (through && through.has(n));
     for (let i = 0; i < order.length; i++) {
       const n = order[i];
       if (!isOpen(n)) continue;
+      const onlyThrough = !byDepth(n);
       for (const m of adj[n] || []) {
+        if (onlyThrough && !through.has(m)) continue;
         if (!(m in hop)) { hop[m] = hop[n] + 1; order.push(m); }
       }
     }
     const closedFrontier = {};
     for (const n of order) {
-      if (isOpen(n)) continue;
+      if (byDepth(n)) continue;
       const hidden = (adj[n] || []).filter((m) => !(m in hop));
       if (hidden.length) closedFrontier[n] = hidden.length;
     }
@@ -692,6 +699,23 @@
     return iv;
   }
 
+  /* ---------- 測地区間（最短路の合併） ----------
+     順序区間 [t, d] は t が深い語彙（`Polynomial` を 18 の宣言が使う）だと数百節点になり、描けば図が
+     爆発する。描く経路は距離の意味での区間
+         I(d, t) = { x : δ(d, x) + δ(x, t) = δ(d, t) }   （δ = 依存の辺で数えた最短の段数）
+     にする。これは d から t への **全ての最短路** の合併で、[t, d] の部分集合。順序区間は報告・右パネルに
+     そのまま残す（情報は落とさない）。経路が無ければ空。 */
+  function geodesicInterval(d, t, dep, ref, maxHops) {
+    maxHops = maxHops || 64;
+    const a = reachable(d, dep, maxHops);
+    if (!(t in a)) return new Set();
+    const b = reachable(t, ref, maxHops);
+    const L = a[t];
+    const geo = new Set();
+    for (const x of Object.keys(a)) if (x in b && a[x] + b[x] === L) geo.add(x);
+    return geo;
+  }
+
   /* ---------- 依存の大きさ ----------
 
      「依存の少ない順」に直接依存の本数を使ってはいけない。c が d の依存先でも
@@ -878,7 +902,7 @@
   LDR.graph = {
     parseJsonl, legacyOrigin, effectiveNodes, buildIndices, buildModuleIndices, visibleClosure, reachable,
     longestPathLevels, layoutCone, shortestUniqueSuffixes, contractThrough, contractNode,
-    minimalAndFrontier, orderInterval, chainDepths, closureStats, hereditary, pickDefaultCenter,
+    minimalAndFrontier, orderInterval, geodesicInterval, chainDepths, closureStats, hereditary, pickDefaultCenter,
     foundation, cleanFrontier, memberOwner, isAnnotation,
   };
 })(window.LDR = window.LDR || {});

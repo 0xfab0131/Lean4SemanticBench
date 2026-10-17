@@ -85,8 +85,10 @@
     listMode: "tree",       // "tree" | "ns"
     groupBy: "subject",     // 部分グラフの束ね方: "subject" | "module" | "kind" | "none"
     treeClosed: new Set(),  // 一覧で畳んでいる枝の鍵（"md:…" はモジュール、"ns:…" は名前空間）
-    kindFilter: new Set(),
-    onlySorry: false,
+    kindFilter: new Set(),  // 種別の絞り込み（一覧とグラフの層。選んだ種別の和）
+    /* 監査の絞り込み（一覧だけ）。左の色付きの札の id の集合（"sorry" / "extra" / "axfree" / "hered" / "cond"。
+       述語は panels.AUDIT）。選んだ札の共通部分に絞る */
+    listFilter: new Set(),
     /* 派生（由来から導かれる宣言: casesOn / mk.inj / sizeOf_spec …）の開閉。
        閉じた由来の派生は、グラフでは由来の節点に畳まれ（辺に経由の札）、一覧では
        由来の行の下の小枝に畳まれる。開閉は一覧とグラフで共有する。
@@ -175,8 +177,16 @@
       if (Object.keys(cache.trace).length > 32) cache.trace = {};
       const idx = state.granularity === "module" ? b.mod : b.decl;
       cache.trace[k] = G.orderInterval(c, t, idx.dep, idx.ref, 64);
+      // 描く経路は最短路の合併（測地区間）。順序区間はそのまま強調と報告に使う
+      cache.trace[k + "|geo"] = G.geodesicInterval(c, t, idx.dep, idx.ref, 64);
     }
     return cache.trace[k];
+  }
+  function traceGeodesic() {
+    const iv = traceInterval();
+    if (!iv) return null;
+    const c = effCenter();
+    return cache.trace[state.granularity + "|" + state.edgeMode + "|" + c + "|" + state.traceTarget + "|geo"] || null;
   }
 
   /* ---------- 由来の強制開放 ----------
@@ -478,7 +488,7 @@
     // 早期 return でも前のデータの値を残さない
     derived.trueMinimal = []; derived.minimalSet = new Set(); derived.frontier = [];
     derived.fullDownSize = 0; derived.highlight = null; derived.traceUnreachable = null;
-    derived.pathSet = null; derived.edgeKindOverlay = null; derived.facetReach = {};
+    derived.pathSet = null; derived.beyondSet = null; derived.traceGeodesic = null; derived.edgeKindOverlay = null; derived.facetReach = {};
     derived.foundation = null; derived.frontierClean = null;
     if (!c || !idx.dep) return;
 
@@ -523,12 +533,19 @@
        区間が空（= 読み込んだ範囲に経路が無い）なら強調は掛けない。空の集合をそのまま
        渡すと「区間外を暗くする」規則で全てが暗くなり、何も伝わらない（自己解析で
        `double_eq` の `propext` に実測）。空だった事実は traceUnreachable で表に出す。 */
-    let openSet = state.expanded;
+    /* 経路表示: 強調（区間の外を暗くする）は順序区間 [t, c] で、描く経路は測地区間（最短路の合併。
+       graph.geodesicInterval）。測地区間の節点は深さに関わらず描き、それらが「経路のために」開くときは
+       経路上の子だけを見せる（visibleClosure の through。残りは +n）。以前は区間の全節点を開き、開いた節点の
+       子を全て見せていたので図が爆発した（指摘。cslib の `Polynomial` への経路で実測）。 */
+    let openSet = state.expanded, through = null;
+    derived.traceGeodesic = null;
     if (state.traceTarget) {
       const interval = traceInterval();
       if (interval && interval.size) {
         derived.highlight = interval;
-        openSet = new Set([...state.expanded, ...interval]);
+        through = traceGeodesic();
+        derived.traceGeodesic = through;
+        openSet = new Set([...state.expanded, ...(through || [])]);
       } else {
         derived.traceUnreachable = state.traceTarget;
       }
@@ -595,7 +612,7 @@
 
     const claimed = new Set([c]);
     for (const sp of specs) {
-      const vis = G.visibleClosure(c, sp.adj, state.baseDepth, openSet);
+      const vis = G.visibleClosure(c, sp.adj, state.baseDepth, state.expanded, through);
       const lv = G.longestPathLevels(c, sp.adj, vis.hop);
       // 種別フィルタと、別の錐が既に取ったノードを層から落とす。
       const layers = lv.layers.map((L, l) => (l === 0 ? L : L.filter((n) => !claimed.has(n) && passes(n))));
@@ -618,6 +635,21 @@
     derived.posAll[c] = center;
     for (const cone of derived.cones) {
       for (const [n, p] of Object.entries(cone.pos)) derived.posAll[n] = Object.assign({ cone: cone.id }, p);
+    }
+    /* 選択の系譜（表示用）。区間 [s, c]（pathSet。中心から選択までの経路）に加え、選択 s から先
+       （中心から離れる向き）に描かれている閉包 B = その錐の隣接で s から到達できる可視の節点。
+       canvas は、区間の中の辺と、s または B から B への辺を橙で描き、残りを薄くする
+       （「そこまでの経路は見えるが、それ以降の経路・系譜が見えない」。指摘） */
+    derived.beyondSet = null;
+    if (state.pathFrom && state.pathFrom !== c && derived.posAll[state.pathFrom]) {
+      const s = state.pathFrom;
+      const cone = derived.cones.find((k) => k.id === derived.posAll[s].cone);
+      if (cone) {
+        const hop = G.reachable(s, cone.adj, 64);
+        const B = new Set();
+        for (const n of Object.keys(hop)) if (n !== s && derived.posAll[n]) B.add(n);
+        derived.beyondSet = B;
+      }
     }
     for (const cone of derived.cones) {
       const seen = new Set();
@@ -890,7 +922,13 @@
       state.kindFilter = s; refresh();
     },
     clearKinds() { state.kindFilter = new Set(); refresh(); },
-    toggleOnlySorry() { state.onlySorry = !state.onlySorry; emit(); },
+    toggleListFilter(id) {
+      const s = new Set(state.listFilter);
+      s.has(id) ? s.delete(id) : s.add(id);
+      state.listFilter = s; emit();
+    },
+    /* 絞り込みを全て解除（監査の札と種別の札。種別はグラフにも効くので refresh） */
+    clearListFilters() { state.listFilter = new Set(); state.kindFilter = new Set(); refresh(); },
     /* 派生の開閉（一覧とグラフで共有）。強制開放中の由来は押しても閉じないので、
        黙って無視せず理由を返す（呼び出し元が通知に出す）。 */
     toggleCluster(o) {

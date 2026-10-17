@@ -165,11 +165,52 @@
      名前空間   namespace の階層。名前空間は初出順（＝ファイル内の上から）で、
                 入れ子の名前空間は木として畳める。
      どちらも同じ木の組み立て（buildTree）で、違いは経路の取り方と枝の並べ方だけ。 */
-  /* 一覧に出す宣言。木は **成員と手書きの宣言** で組み、派生（originRel = facet）は由来ごとに
+  /* ================= 一覧の絞り込み =================
+
+     上の色付きの札（sorry / 追加公理 / 公理なし / 無条件で閉じる / 条件付き）は、統計であると同時に
+     押せる絞り込み。以前は押せない統計と押せる「sorry のみ」が別の場所に同じ数字で並び、絞り込みも
+     sorry しか無かった（指摘）。
+       監査の札  選んだ札の **共通部分** に絞る（別の次元を重ねれば「条件付きで公理なし」のように問いが
+                 立つ。相反する札（公理なし と sorry）を重ねれば空になるが、札の件数が先に 0 を示す）。
+       種別の札  kindFilter（グラフの層にも効く既存の集合）。選んだ種別の **和**。
+     札の件数は「他の絞り込みと検索を掛けた上で、その札を押したら何件になるか」（faceted count）。
+     件数が 0 の札は押せない（空の一覧に落とさない）。母集団は一覧に出る宣言（対象の手書きと成員。
+     派生・断片・内部補助・外部は含めない）なので、件数は一覧の件数と必ず整合する
+     （以前は派生も数えていて「条件付き 89」が一覧の 78 件を超えて見えた。実測）。 */
+  const STD = new Set(["propext", "Classical.choice", "Quot.sound"]);
+  const AUDIT = [
+    { id: "sorry",  l: "sorry", dot: "#f43f5e",
+      on: "bg-rose-600 text-white", off: "bg-rose-50 text-rose-800 dark:bg-rose-950/60 dark:text-rose-200",
+      t: "sorry を含む宣言", pred: (n) => !!n.usesSorry },
+    { id: "extra",  l: "追加公理",
+      on: "bg-orange-600 text-white", off: "bg-orange-50 text-orange-800 dark:bg-orange-950/60 dark:text-orange-200",
+      t: "propext / Classical.choice / Quot.sound 以外の公理に依存する宣言", pred: (n) => n.axioms.some((a) => !STD.has(a) && a !== "sorryAx") },
+    { id: "axfree", l: "公理なし",
+      on: "bg-emerald-600 text-white", off: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
+      t: "公理に一切依存しない宣言", pred: (n) => n.axioms.length === 0 },
+    { id: "hered",  l: "無条件で閉じる",
+      on: "bg-emerald-700 text-white", off: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200",
+      t: "自分にも依存先にも仮定（Prop の束縛）が無い。無条件に得たものだけから無条件に得られている（インスタンス束縛は引数であって仮定ではないので数えない）",
+      pred: (n, m) => !!(m.hered && m.hered[n.name]) },
+    { id: "cond",   l: "条件付き",
+      on: "bg-amber-600 text-white", off: "bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
+      t: "仮定またはインスタンスを要求している宣言", pred: (n) => !!(n.numHyp || n.numInst) },
+  ];
+  const AUDIT_BY = Object.fromEntries(AUDIT.map((a) => [a.id, a]));
+
+  /* 一覧の母集団（検索まで掛けたもの）が、いまの絞り込みを通るか。
+     omit は「この札（または "kind"）を除いて判定」。札の件数を、その札を押したときの結果として出すため。 */
+  function listPass(nd, st, m, omit) {
+    for (const id of st.listFilter) if (id !== omit && AUDIT_BY[id] && !AUDIT_BY[id].pred(nd, m)) return false;
+    if (omit !== "kind" && st.kindFilter.size && !st.kindFilter.has(nd.kind)) return false;
+    return true;
+  }
+
+  /* 一覧の母集団。木は **成員と手書きの宣言** で組み、派生（originRel = facet）は由来ごとに
      集めて由来の行の下の小枝に出す。断片（part）は一覧に出さない（由来の証明の一部）。
      外部（参照だけ）は出さない。内部名でも派生なら小枝には出す（`_sizeOf_inst` 等）。
-     検索は、派生の名前が一致すればその由来も残す。 */
-  function visibleNames(st) {
+     検索は、派生の名前が一致すればその由来も残す。絞り込み（札）はこの上に visibleNames が掛ける。 */
+  function listPopulation(st) {
     const nodes = st.nodes;
     const base = st.order.length ? st.order : Object.keys(nodes);
     const q = st.query.trim().toLowerCase();
@@ -187,9 +228,15 @@
       return nd && !nd.external && !nd.internal && nd.originRel !== "facet" && nd.originRel !== "part";
     });
     if (q) names = names.filter((n) => hit(n) || facetsOf.has(n));
-    if (st.onlySorry) names = names.filter((n) => nodes[n].usesSorry);
-    if (st.kindFilter.size) names = names.filter((n) => st.kindFilter.has(nodes[n].kind));
     return { names, facetsOf };
+  }
+
+  function visibleNames(st) {
+    const pop = listPopulation(st);
+    const m = S.metrics();
+    const filtered = st.listFilter.size > 0 || st.kindFilter.size > 0;
+    const names = filtered ? pop.names.filter((n) => listPass(st.nodes[n], st, m)) : pop.names;
+    return { names, facetsOf: pop.facetsOf, total: pop.names.length, filtered };
   }
 
   /* 名前の描画。接頭辞（名前空間）は薄く、末尾成分は濃く。幅が足りないときは
@@ -494,7 +541,7 @@
   }
 
   function buildRows(st, dv) {
-    const { names, facetsOf } = visibleNames(st);
+    const { names, facetsOf, total, filtered } = visibleNames(st);
     const cen = dv.center;
     const isMarked = (n) => n === cen || n === st.selected;
     curParts = dv.partCount || {};
@@ -523,7 +570,7 @@
           rows.push(r);
         });
       }
-      return { rows, count: names.length, facets: [...facetsOf.values()].reduce((a, b) => a + b.length, 0) };
+      return { rows, count: names.length, total, filtered, facets: [...facetsOf.values()].reduce((a, b) => a + b.length, 0) };
     }
 
     /* モジュール = ファイルの階層（名前順）→ その中は名前空間の木（初出順）。
@@ -541,20 +588,21 @@
     };
     const root = buildTree(names, pathOf, isMarked);
     attachHeads(root, visible, isMarked);
-    return { rows: treeRows(root, st, cen, "md:", facetsOf, isMarked), count: names.length,
+    return { rows: treeRows(root, st, cen, "md:", facetsOf, isMarked), count: names.length, total, filtered,
              facets: [...facetsOf.values()].reduce((a, b) => a + b.length, 0) };
   }
 
   let lastCenter = null;
   function renderList(st, dv) {
-    const k = [st.query, st.listMode, st.onlySorry, S.openSignature(),
+    const k = [st.query, st.listMode, [...st.listFilter].sort().join(","), st.edgeMode, S.openSignature(),
       [...st.kindFilter].sort().join(","),
       [...st.treeClosed].sort().join(","), st.order.length, Object.keys(st.nodes).length,
       dv.center, st.selected].join("|");
     once("list", k, () => {
-      const { rows, count, facets } = buildRows(st, dv);
+      const { rows, count, total, filtered, facets } = buildRows(st, dv);
       vsetRows(rows);
-      $("listCount").textContent = `${count} 件` + (facets ? `（派生 ${facets}）` : "");
+      // 絞り込み中は「残った件数 / 母集団」。母集団は検索まで掛けた一覧の宣言数
+      $("listCount").textContent = (filtered ? `${count} / ${total} 件` : `${count} 件`) + (facets ? `（派生 ${facets}）` : "");
       /* 中心が変わったときだけ、その行まで一覧を送る。選択やフィルタのたびに
          動かすと読んでいる位置を奪う。畳んだ枝の中なら行が無いので、
          見出しの印（groupRow の marked）に任せる。 */
@@ -572,62 +620,58 @@
     return p.length <= 2 ? u : p.slice(-2).join(".");
   }
 
-  /* ================= 監査サマリ =================
-     ここは統計だけ。押せるものは置かない（押せるチップと押せないチップが同じ見た目で
-     並ぶと、何が操作で何が数字か分からない）。一覧の絞り込みは renderFilters にある。 */
-  const STD = new Set(["propext", "Classical.choice", "Quot.sound"]);
-
-  function renderAudit(st) {
-    // 「無条件で閉じる」件数は metrics(edgeMode 依存)から来る。鍵に含める。
-    once("audit", Object.keys(st.nodes).length + "|" + st.edgeMode, () => {
-      // 件数は対象の宣言について。内部補助は対象の証明の一部であって、独立した宣言として数えない
-      const own = Object.values(st.nodes).filter((n) => !n.external && !n.internal);
-      const sorry = own.filter((n) => n.usesSorry).length;
-      const extra = own.filter((n) => n.axioms.some((a) => !STD.has(a) && a !== "sorryAx")).length;
-      const axFree = own.filter((n) => n.axioms.length === 0).length;
-      const m = S.metrics();
-      const hered = own.filter((n) => m.hered && m.hered[n.name]).length;
-      const cond = own.filter((n) => n.numHyp || n.numInst).length;
-      $("auditBar").innerHTML = `
-        <span class="px-2 py-1 rounded-md text-[12px] flex items-center gap-1.5
-          ${sorry ? "bg-rose-50 text-rose-800 dark:bg-rose-950/60 dark:text-rose-200" : "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300"}"
-          title="sorry を含む宣言の数（下の「sorry のみ」で絞り込める）">
-          <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>sorry ${sorry}
-        </span>
-        <span class="px-2 py-1 rounded-md text-[12px] bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300"
-              title="propext / Classical.choice / Quot.sound 以外の公理に依存">追加公理 ${extra}</span>
-        <span class="px-2 py-1 rounded-md text-[12px] bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
-              title="公理に一切依存しない宣言">公理なし ${axFree}/${own.length}</span>
-        <span class="px-2 py-1 rounded-md text-[12px] bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
-              title="自分にも依存先にも仮定（Prop の束縛）が無い。無条件に得たものだけから無条件に得られている（インスタンス束縛は引数であって仮定ではないので数えない）">無条件で閉じる ${hered}</span>
-        <span class="px-2 py-1 rounded-md text-[12px] bg-amber-50 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300"
-              title="仮定またはインスタンスを要求している宣言">条件付き ${cond}</span>`;
-    });
-  }
-
-  /* ================= 一覧の絞り込み =================
-     押せるものだけをここに置く。☑ / ☐ で「いま効いているか」が一目で分かる。
-     件数は絞り込みの対象になる宣言の数（対象の宣言について）。 */
+  /* ================= 絞り込みの札と、派生の開閉 =================
+       auditBar     監査の札（押すと絞る）＋ 種別の札 ＋ 解除。定義と件数の意味は AUDIT / listPass の注記
+       listFilters  派生の開閉（☑ / ☐）。絞り込みではなく木の見せ方なので、並べ方の行に置く */
   function renderFilters(st, dv) {
-    const own = Object.values(st.nodes).filter((n) => !n.external && !n.internal);
-    const sorry = own.filter((n) => n.usesSorry).length;
+    const m = S.metrics();
+    const pop = listPopulation(st).names.map((n) => st.nodes[n]);
     const facets = Object.values(dv.facetCount || {}).reduce((a, b) => a + b, 0);
     const allOpen = S.allFacetsOpen();
-    once("filters", [sorry, facets, st.onlySorry, allOpen, st.openClusters.size].join("|"), () => {
-      // 札の内側では折り返さない（「sorry のみ／(0)」と二行に割れた。実測）。狭ければ札ごと次の行へ
-      const tog = (id, on, label, title) => `<button data-filter="${id}" title="${esc(title)}"
-        class="px-2 py-1 rounded-md text-[11.5px] flex items-center gap-1.5 border whitespace-nowrap
-          ${on ? "bg-stone-900 text-white border-stone-900 dark:bg-stone-100 dark:text-stone-900 dark:border-stone-100"
-               : "bg-white text-stone-600 border-stone-300 hover:bg-stone-100 dark:bg-stone-900 dark:text-stone-300 dark:border-stone-600 dark:hover:bg-stone-800"}">
-        <span class="text-[11px]">${on ? "☑" : "☐"}</span>${label}</button>`;
-      $("listFilters").innerHTML =
-        tog("sorry", st.onlySorry, `sorry のみ (${sorry})`, "sorry を含む宣言だけを一覧に出す")
-        + (facets
-          ? tog("openall", allOpen, `派生を全て開く (${facets})`,
-                "派生 = 由来（構造体・帰納型・構成子・定義）から Lean が機械的に作る宣言（casesOn / rec / mk.inj / sizeOf_spec / eq_1 等）。既定では由来の行とグラフの節点に畳む。"
+    const key = [pop.length, st.query, st.edgeMode, [...st.listFilter].sort().join(","), [...st.kindFilter].sort().join(","),
+      facets, allOpen, st.openClusters.size, Object.keys(st.nodes).length].join("|");
+    once("filters", key, () => {
+      /* 札。押せる（絞り込み）。選んでいる札は濃い色＋輪、件数 0 の札は薄くして押せなくする。
+         札の内側では折り返さない（狭ければ札ごと次の行へ） */
+      const chip = (attr, on, cnt, label, title, cls, dotColor) => {
+        const dead = !on && !cnt;
+        return `<button ${attr} ${dead ? "disabled" : ""} aria-pressed="${on}"
+          title="${esc(title)}${on ? "（押すと解除）" : dead ? "（該当なし）" : "（押すと一覧をこの条件に絞る）"}"
+          class="px-1.5 py-0.5 rounded-md text-[11px] flex items-center gap-1 whitespace-nowrap ${cls}
+                 ${dead ? "opacity-40" : ""} ${on ? "ring-2 ring-offset-1 ring-stone-400 dark:ring-stone-500 ring-offset-white dark:ring-offset-stone-900" : "hover:brightness-95 dark:hover:brightness-125"}">
+          ${dotColor ? `<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:${dotColor}"></span>` : ""}${esc(label)}
+          <span class="tabular-nums ${on ? "opacity-90" : "opacity-70"}">${cnt}</span></button>`;
+      };
+      const audit = AUDIT.map((a) => {
+        const on = st.listFilter.has(a.id);
+        const cnt = pop.filter((n) => a.pred(n, m) && listPass(n, st, m, a.id)).length;
+        return chip(`data-filter="${a.id}"`, on, cnt, a.l, a.t, on ? a.on : a.off, a.dot);
+      });
+      /* 種別。母集団に現れる種別（選択中の種別は、検索で消えても札を残す）。グラフの層にも効く */
+      const kinds = Object.keys(KIND).filter((k) => st.kindFilter.has(k) || pop.some((n) => n.kind === k));
+      const kindChips = kinds.map((k) => {
+        const on = st.kindFilter.has(k);
+        const cnt = pop.filter((n) => n.kind === k && listPass(n, st, m, "kind")).length;
+        return chip(`data-kind="${esc(k)}"`, on, cnt, kinfo(k).ja, `種別 ${kinfo(k).ja}。一覧とグラフの層をこの種別に絞る（複数選べば和）`,
+          on ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900" : "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300", kinfo(k).c);
+      });
+      const active = st.listFilter.size + st.kindFilter.size;
+      const clear = active ? `<button data-filter="clear" title="絞り込みを全て解除する"
+          class="px-1.5 py-0.5 rounded-md text-[11px] whitespace-nowrap text-stone-500 hover:bg-stone-100 dark:hover:bg-stone-800 border border-dashed border-stone-300 dark:border-stone-600">✕ 解除 ${active}</button>` : "";
+      $("auditBar").innerHTML = `<div class="flex flex-wrap gap-1">${audit.join("")}${clear}</div>`
+        + (kindChips.length ? `<div class="flex flex-wrap gap-1 mt-1">${kindChips.join("")}</div>` : "");
+
+      /* 派生の開閉。☑ / ☐ で「いま効いているか」が一目で分かる */
+      $("listFilters").innerHTML = facets
+        ? `<button data-filter="openall" aria-pressed="${allOpen}"
+            title="${esc("派生 = 由来（構造体・帰納型・構成子・定義）から Lean が機械的に作る宣言（casesOn / rec / mk.inj / sizeOf_spec / eq_1 等）。既定では由来の行とグラフの節点に畳む。"
                 + "☑ で全ての由来を開き、☐ で全て畳む（個別の開閉と同じ集合を操作する）。個別には行の ▸ やグラフの +n で開ける"
-                + (st.openClusters.size && !allOpen ? `。いま ${st.openClusters.size} / ${S.facetOriginCount()} の由来を開いている` : ""))
-          : "");
+                + (st.openClusters.size && !allOpen ? `。いま ${st.openClusters.size} / ${S.facetOriginCount()} の由来を開いている` : ""))}"
+            class="px-1.5 py-0.5 rounded-md text-[11px] flex items-center gap-1 border whitespace-nowrap
+              ${allOpen ? "bg-stone-900 text-white border-stone-900 dark:bg-stone-100 dark:text-stone-900 dark:border-stone-100"
+                        : "bg-white text-stone-600 border-stone-300 hover:bg-stone-100 dark:bg-stone-900 dark:text-stone-300 dark:border-stone-600 dark:hover:bg-stone-800"}">
+            <span>${allOpen ? "☑" : "☐"}</span>派生を全て開く <span class="tabular-nums opacity-70">${facets}</span></button>`
+        : "";
     });
   }
 
@@ -1000,6 +1044,36 @@
     ? `<span class="shrink-0 text-[8.5px] px-1 rounded-sm bg-stone-100 dark:bg-stone-800 text-stone-500 dark:text-stone-400"
          title="${esc(VIA[via].title)}">${VIA[via].t}</span>` : "";
 
+  /* ---- 判断（sequent）の表示 ----
+     前提の論理を  仮定₁, 仮定₂ ⊢ 結論  の形で出す。以前は結論だけ（`propext ⊢ a = b`）で、
+     何から何を得る規則なのか（propext なら `a ↔ b ⊢ a = b`）が読めなかった（指摘）。
+       データ引数  `{a b : Prop} [Field F] (x : α)` を上に薄く一行（同じ種類・同じ型の隣り合う束縛は
+                   `{a b : Prop}` に束ねる。切り詰め。全文は title）
+       仮定        命題の束縛。型だけを琥珀で並べる（名前は title）
+       結論        ⊢ の右 */
+  /* 部品は sig.sequent（レポートの導出図と共通）。ここは HTML にするだけ */
+  function sequentHtml(nd, withArgs) {
+    const s = LDR.sig.sequent(nd, true), full = LDR.sig.sequent(nd, false);
+    const hy = s.hyps.map((h, i) => `<span class="hy" title="${esc((h.name ? h.name + " : " : "") + full.hyps[i].type)}">${esc(h.type)}</span>`)
+      .join('<span class="ts">, </span>');
+    return (withArgs && s.args ? `<div class="args" title="${esc(full.args)}">${esc(s.args)}</div>` : "")
+      + `<div class="sq" title="${esc(nd.typeString || nd.conclusion || "")}">${hy ? hy + " " : ""}<span class="ts">⊢</span> <span class="cc">${esc(s.concl) || "—"}</span></div>`;
+  }
+  /* 前提の脚注: この前提が持ち込む公理（短い名前。sorryAx は赤、標準外は琥珀）、既知の範囲での |↓x|、
+     主張と証明の大きさ。公理は「この前提を認めると何に依存するか」であり、導出図の論理の内容そのもの */
+  const AX_SHORT = (a) => (a === "Classical.choice" ? "choice" : a === "Quot.sound" ? "sound" : a);
+  function premiseMeta(name, nd, met) {
+    const axs = nd.axioms || [];
+    const parts = [];
+    if (axs.length) parts.push(`<span title="この前提の証明が依存する公理: ${esc(axs.join(", "))}">公理 ${axs.map((a) =>
+      `<b class="${a === "sorryAx" ? "bad" : STD.has(a) ? "" : "extra"}" title="${esc(a)}">${esc(AX_SHORT(a))}</b>`).join(" ")}</span>`);
+    else if (nd.kind !== "axiom" && !nd.stub) parts.push(`<span class="ok" title="公理に依存しない（カーネルで公理なしに閉じている）">公理非依存</span>`);
+    if (met && met.closure && met.closure[name]) parts.push(`<span title="既知の範囲での下方閉集合の元数 |↓x|（小さいほど原始的）">|↓| ${met.closure[name]}</span>`);
+    if (nd.typeSize || nd.valueSize) parts.push(`<span title="主張（型）の節点数 / 証明（値）の節点数">型 ${nd.typeSize || 0} · 証明 ${nd.valueSize || 0}</span>`);
+    if (nd.numInst) parts.push(`<span title="要求するインスタンス（型クラス）の数">インスタンス ${nd.numInst}</span>`);
+    return parts.length ? `<div class="meta">${parts.join("")}</div>` : "";
+  }
+
   function premiseRow(name, st, depth, seen, via, met) {
     const nd = st.nodes[name] || {};
     const role = LDR.roles.roleOf(name, nd);
@@ -1007,12 +1081,12 @@
     const open = st.derivOpen.has(name);
     const canOpen = depth > 0 && (((nd.typeDeps || []).length + (nd.valueDeps || []).length) > 0);
     const sh = nd.isProp ? LDR.sig.SHAPE[nd.shape] : null;
-    const concl = conclusionOf(nd);
-    /* 一行目: ▸（開閉）／★（公理）・種別の点・名前・形・経由・↗（見る）。二行目: その前提の結論（一行、切り詰め）。
+    /* 一行目: ▸（開閉）／★（公理）・種別の点・名前・形・経由・出どころ（パッケージ）・↗（見る）。
+       続く行: データ引数（薄く一行）、判断  仮定 ⊢ 結論（三行まで）、脚注（公理・|↓|・大きさ）。
        列は CSS grid（index.html の .pv .prem）で揃える。
        名前を押すと **その場で開閉** する（以前は押すと右パネルがその宣言へ飛び、図を読んでいる途中で
        文脈を失った。指摘）。別の宣言として見たいときは行末の ↗ を押す（履歴に積まれ、‹ で戻れる）。
-       開いているときは結論の一行を出さない（入れ子の図の横線の下に同じ結論が出る。重複していた）。 */
+       開いているときは判断を出さない（入れ子の図の横線の下に同じ判断が出る。重複していた）。 */
     const toggle = canOpen
       ? `<button data-deriv="${esc(name)}" title="${open ? "この前提の導出を閉じる" : "この前提の導出を開く"}"
            class="text-[10px] text-stone-400 hover:text-stone-700 text-center">${open ? "▾" : "▸"}</button>`
@@ -1022,16 +1096,18 @@
         <span class="t font-mono text-[11px] truncate min-w-0">${esc(shortOf(name))}</span>
         ${sh ? `<span class="shrink-0 text-[9px]" style="color:${col}" title="${esc(sh.note)}">${sh.ja}</span>` : ""}
         ${viaTag(via)}
+        ${pkgChip(nd)}
         ${nd.usesSorry ? '<span class="shrink-0 text-[9px] text-rose-600">sorry</span>' : ""}
       </div>
       <button class="go" data-sel="${esc(name)}" title="この宣言を右パネルで見る（グラフでも選択。‹ で戻れる）">↗</button>`;
-    const sub = concl && !(open && canOpen) ? `<div class="cl" title="${esc(nd.conclusion || nd.typeString || "")}">⊢ ${esc(concl)}</div>` : "";
+    const sub = !(open && canOpen) ? `<div class="cl">${sequentHtml(nd, true)}${premiseMeta(name, nd, met)}</div>` : "";
     const nested = open && canOpen
-      ? `<div class="nest" style="border-color:${col}66">${derivation(name, st, depth - 1, seen, met)}</div>` : "";
+      ? `<div class="nest" style="border-color:${col}66">${derivation(name, st, depth - 1, seen, met, true)}</div>` : "";
     return `<div class="prem" style="border-left-color:${col}88">${toggle}${head}${sub}${nested}</div>`;
   }
 
-  function derivation(name, st, depth, seen, met) {
+  /* withArgs: 横線の下の判断にデータ引数も出す（入れ子の図。最上位はシグネチャの区画が上にあるので出さない） */
+  function derivation(name, st, depth, seen, met, withArgs) {
     const nd = st.nodes[name];
     if (!nd) return "";
     met = met || S.metrics();
@@ -1062,15 +1138,21 @@
     if (parts.frame.length) foot.push(`<span class="text-stone-400" title="${esc(parts.frame.map((v) => v.name).join(", "))}">骨組み ${parts.frame.length}</span>`);
     if (parts.part && parts.part.length) foot.push(`<span class="text-stone-400" title="${esc(parts.part.map((v) => v.name).join(", "))}（証明・本体の切り出し。中身は前提として上に展開済み）">断片 ${parts.part.length}</span>`);
     const footHtml = foot.length ? `<div class="mt-1.5 text-[9px] leading-relaxed" style="word-spacing:2px">${foot.join(" · ")}</div>` : "";
-    const concl = `<div class="fig-concl" title="${esc(nd.conclusion || nd.typeString || "")}">⊢ ${esc(conclusionOf(nd)) || "—"}</div>`;
+    // 横線の下は判断  仮定 ⊢ 結論（前提の行と同じ読み方）
+    const concl = `<div class="fig-concl">${sequentHtml(nd, !!withArgs)}</div>`;
 
     /* 前提が無いなら、図は結論一行（空の前提欄と横線を出すと、何も無いのに六行使う。実測）。
        範囲外の依存（種別不明）があれば「前提なし」とは言わず、そう書く。証明が反射律だけなら定義的等式。 */
     if (!premises.length) {
       const REFL = new Set(["rfl", "Iff.rfl", "Eq.refl", "HEq.refl", "Iff.refl", "id", "trivial", "True.intro"]);
-      const definitional = nd.isProp && (nd.valueDeps || []).every((d) => REFL.has(d) || LDR.roles.isFrameName(d) || ((st.nodes[d] || {}).originRel === "part"));
-      // 定義的等式の判定を先に（`Iff.rfl` を通り抜けた先の `Iff.refl` が範囲外で「前提は範囲外」と出ていた。実測）
-      const why = definitional ? "定義的等式 — 両辺は主張の語彙の定義を展開すると一致する（確認すべき内容はその定義にある）"
+      /* 定義的等式 = 命題で、証明と骨組みだけから成る（証明が空の宣言は該当しない。公理は証明を持たず、
+         `fun h => h` のような証明は定数を一つも参照しない）。判定は範囲外の判定より先に
+         （`Iff.rfl` を通り抜けた先の `Iff.refl` が範囲外で「前提は範囲外」と出ていた。実測） */
+      const vd = nd.valueDeps || [];
+      const definitional = nd.isProp && nd.kind !== "axiom" && vd.length > 0
+        && vd.every((d) => REFL.has(d) || LDR.roles.isFrameName(d) || ((st.nodes[d] || {}).originRel === "part"));
+      const why = nd.kind === "axiom" ? "公理 — これ以上遡れない仮定。前提は無い（この公理を認めるかどうかが問い）"
+        : definitional ? "定義的等式 — 両辺は主張の語彙の定義を展開すると一致する（確認すべき内容はその定義にある）"
         : parts.unknown && parts.unknown.length
         ? `前提は範囲外 ${parts.unknown.length} 件（${esc(parts.unknown.map((v) => shortOf(v.name)).join(", "))}）— レポートの範囲外で種別が分からない`
         : "前提なし — 論理の骨組みだけで閉じている";
@@ -1197,9 +1279,9 @@
         </div>
         ${depPackages(nd)}
         <details data-keep="deriv" class="sec"${open("deriv")}>
-          <summary title="推論図: 前提は横線の上、結論は下。▸ で前提の導出を開く。公理は ★、前提は原始的なものから順">
+          <summary title="推論図: 前提は横線の上、結論は下。▸ で前提の導出を開く。公理は ★、前提は原始的なものから順。各前提は  仮定 ⊢ 結論  の判断と、持ち込む公理を示す">
             <span>導出図</span>
-            <span class="text-stone-400">前提 ${nPrem}（公理 ${parts.axiom.length} · 補題 ${parts.lemma.length}）· 語彙 ${parts.vocab.length}${parts.plumbing.length ? ` · 配管 ${parts.plumbing.length}` : ""}${parts.unknown.length ? ` · 範囲外 ${parts.unknown.length}` : ""}${parts.frame.length ? ` · 骨組み ${parts.frame.length}` : ""}${parts.part && parts.part.length ? ` · 断片 ${parts.part.length}` : ""}</span>
+            <span class="text-stone-400 wrap">前提 ${nPrem}（公理 ${parts.axiom.length} · 補題 ${parts.lemma.length}）· 語彙 ${parts.vocab.length}${parts.plumbing.length ? ` · 配管 ${parts.plumbing.length}` : ""}${parts.unknown.length ? ` · 範囲外 ${parts.unknown.length}` : ""}${parts.frame.length ? ` · 骨組み ${parts.frame.length}` : ""}${parts.part && parts.part.length ? ` · 断片 ${parts.part.length}` : ""}</span>
           </summary>
           <div class="px-2 pb-2 pt-1 border-t border-stone-200 dark:border-stone-700">${derivation(name, st, 3, seen)}</div>
         </details>
@@ -1482,9 +1564,16 @@
                  ${on ? "ring-2 ring-amber-500" : "hover:ring-1 hover:ring-amber-400"}
                  ${shown ? "" : "opacity-60"}">${esc(shortOf(n))}${extra ? `<span class="text-[9px] text-amber-700/70 dark:text-amber-300/70"> ${extra}</span>` : ""}</button>`;
       };
+      /* 経路表示中は、順序区間の大きさと、描いている測地区間（最短路の合併）の大きさを示す。
+         区間の全節点を描くと図が爆発するので、描くのは最短路上の節点だけ（残りは +n で開ける） */
+      const geo = dv.traceGeodesic, hl = dv.highlight;
+      const traceInfo = st.traceTarget && hl && hl.size
+        ? `<span class="text-[10.5px] text-amber-800 dark:text-amber-300" title="順序区間 [t, c] = ↑t ∩ ↓c の節点数と、そのうち描いている最短路上（測地区間: δ(c,x)+δ(x,t)=δ(c,t)）の節点数。区間の外は暗く、最短路の外の子は +n で開ける">
+             区間 ${hl.size} 件のうち最短路上の ${geo ? geo.size : 0} 件を描く</span>` : "";
       const head = `
         <div class="flex items-baseline gap-2 flex-wrap mb-1">
           <span class="text-[10.5px] text-stone-500">${esc(MODE[mode].t)}。押すとそこへ至る経路だけを表示</span>
+          ${traceInfo}
           ${st.traceTarget ? `<button data-trace="${esc(st.traceTarget)}"
             class="text-[10.5px] px-1.5 py-0.5 rounded-sm bg-amber-500 text-white">経路表示を解除</button>` : ""}
         </div>`;
@@ -1544,7 +1633,7 @@
     $("btnFwd").classList.toggle("opacity-30", !canFwd);
 
     once("toolbar", [st.edgeMode, st.granularity, st.baseDepth, st.refFilter,
-      st.expanded.size, [...st.kindFilter].sort().join(","), st.listMode,
+      st.expanded.size, st.listMode,
       st.groupBy, st.density, st.hideFrame,
       Object.keys(st.nodes).length, dv.center].join("|"), () => {
       // 区切りボタンの内側では折り返さない（「モジュ／ール」と割れた。実測）
@@ -1579,14 +1668,7 @@
       const mark = (el, on, cls) => cls.forEach((c) => el.classList.toggle(c, on));
       mark($("btnFrame"), st.hideFrame,
         ["bg-stone-900", "text-white", "dark:bg-stone-100", "dark:text-stone-900", "border-stone-900"]);
-
-      const kinds = [...new Set(Object.values(st.nodes).map((n) => n.kind))].sort();
-      $("kindChips").innerHTML = kinds.map((k) => {
-        const on = st.kindFilter.has(k);
-        return `<button data-kind="${esc(k)}" class="px-1.5 py-0.5 rounded-sm text-[11px] flex items-center gap-1
-          ${on ? "bg-stone-900 text-white dark:bg-stone-100 dark:text-stone-900" : "bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-300"}">
-          ${dot(k, 6)}${kinfo(k).ja}</button>`;
-      }).join("");
+      // 種別の絞り込みは左の絞り込みの札（renderFilters）に一本化した（「表示 ▾」との二重表示を解消）
 
       $("crumb").innerHTML = `<span class="font-mono text-[12px] text-stone-500 truncate">${esc(dv.center || "")}</span>`;
     });
@@ -1595,7 +1677,6 @@
   function renderAll(st, dv) {
     if (!dv || !dv.posAll) return;
     renderToolbar(st, dv);
-    renderAudit(st);
     renderFilters(st, dv);
     renderList(st, dv);
     renderInspector(st, dv);

@@ -713,18 +713,24 @@ console.log(`  極小元 ${tm.length} 件 / 下方閉集合 ${S.derived.fullDown
 if (tm.length) {
   /* 最も遠い極小元を選ぶ。深さ 1 の区間では「開いて見せる」機構が試されない。 */
   const far = tm.slice().sort((a, b) => (met.depth[b] || 0) - (met.depth[a] || 0))[0];
+  const before = Object.keys(S.derived.posAll).length;
   const [tTrace] = ms(() => S.actions.setTrace(far));
-  const hl = S.derived.highlight;
-  console.log(`  ${short(far)} への経路: ${hl ? hl.size : 0} ノード / ${tTrace.toFixed(1)} ms`);
+  const hl = S.derived.highlight, geo = S.derived.traceGeodesic;
+  console.log(`  ${short(far)} への経路: 区間 ${hl ? hl.size : 0} ノード / 最短路上 ${geo ? geo.size : 0} ノード / ${tTrace.toFixed(1)} ms`);
   ok(hl && hl.has(S.derived.center) && hl.has(far), "経路の両端が区間に入っている");
-  /* 区間の節点は全て描画対象になる（開くだけでなく、層上限より優先して置く）。
-     骨組みは既定で潰して通り抜け、断片は由来に埋め戻されるので、どちらも除いて検査する。 */
+  /* 描くのは測地区間（最短路の合併 δ(c,x)+δ(x,t)=δ(c,t)）。区間の全節点を開くと図が爆発した（指摘）。
+       ・測地区間 ⊆ 順序区間で、両端を含む
+       ・測地区間の節点は全て描画対象（骨組みは潰して通り抜け、断片は由来に埋め戻されるので除く）
+       ・描画数は「経路表示前の描画数 ＋ 最短路上の節点数」を超えない（経路のために開いた節点は経路上の子だけを見せる） */
   const shown = Object.keys(S.derived.posAll);
   const isPartN = (n) => { const x = S.state.nodes[n]; return x && x.originRel === "part" && x.origin && S.state.nodes[x.origin]; };
-  const want = hl ? [...hl].filter((n) => LDR.roles.roleOf(n, S.state.nodes[n]) !== "frame" && !isPartN(n)) : [];
+  ok(!!geo && geo.size >= 2 && geo.has(S.derived.center) && geo.has(far) && [...geo].every((n) => hl.has(n)),
+     "測地区間（最短路の合併）は順序区間に含まれ、両端を含む", geo ? `${geo.size} / 区間 ${hl.size}` : "");
+  const want = geo ? [...geo].filter((n) => LDR.roles.roleOf(n, S.state.nodes[n]) !== "frame" && !isPartN(n)) : [];
   const missing = want.filter((n) => !S.derived.posAll[n]);
-  ok(hl && missing.length === 0, "経路上の全節点（骨組み・断片を除く）が描画対象になる",
+  ok(geo && missing.length === 0, "最短路上の全節点（骨組み・断片を除く）が描画対象になる",
      missing.length ? `欠け ${missing.length} 例 ${missing.slice(0, 3).map(short).join(", ")}` : `${want.length} / 描画 ${shown.length}`);
+  ok(geo && shown.length <= before + geo.size, "経路表示で描画数が爆発しない（表示前 ＋ 最短路上の節点数 以内）", `${before} → ${shown.length}（最短路上 ${geo ? geo.size : 0}）`);
   ok(S.derived.traceUnreachable === null, "到達可能な公理の経路表示が「到達不能」にならない");
   S.actions.setTrace(far);
 }

@@ -166,5 +166,46 @@
     part:   { ja: "断片", note: "由来の証明・本体の一部" },
   };
 
-  LDR.sig = { decompose, abbrev, shortName, userName, isPrivateName, splitTopSpaces, findTop, strip, SHAPE, ORIGIN_KIND, ORIGIN_REL };
+  /* ---- 判断（sequent）の部品 ----
+     宣言の型を  データ引数 / 仮定 / 結論  に分けて文字列にする。右パネルの前提の行とレポートの導出図が
+     同じ関数で組む（二か所で別々に組むと必ず乖離する）。
+       cleanName   衛生名（`inst._@.…`、`_hyg`）と Name.anonymous の文字列化は無名として扱う
+       argGroups   データ引数を Lean の記法で。同じ種類・同じ型の隣り合う名前付き束縛は `{a b : Prop}` に束ねる
+       sequent     { args: "…", hyps: [{name, type}], concl }。short なら型と結論を末尾二成分に畳む */
+  const cleanName = (s) => {
+    const t = String(s || "");
+    return (t === "[anonymous]" || /(^|\.)_@\.|_hyg/.test(t)) ? "" : t;
+  };
+  function argGroups(args, short) {
+    const out = [];
+    for (const b of args) {
+      const nm = cleanName(b.name);
+      const last = out[out.length - 1];
+      if (last && nm && last.names.length && last.kind === b.kind && last.type === b.type) { last.names.push(nm); continue; }
+      out.push({ kind: b.kind, type: b.type, names: nm ? [nm] : [] });
+    }
+    const br = { inst: ["[", "]"], implicit: ["{", "}"], strictImplicit: ["⦃", "⦄"] };
+    return out.map((g) => {
+      const [l, r] = br[g.kind] || ["(", ")"];
+      const ty = short ? abbrev(g.type) : String(g.type || "");
+      return l + (g.names.length ? g.names.join(" ") + " : " : (g.kind === "inst" ? "" : "_ : ")) + ty + r;
+    });
+  }
+  function sequent(nd, short) {
+    const B = (nd && nd.binders) || [];
+    const f = (s) => (short ? abbrev(s) : String(s || ""));
+    return {
+      args: argGroups(B.filter((b) => !b.prop), short).join(" "),
+      hyps: B.filter((b) => b.prop).map((b) => ({ name: cleanName(b.name), type: f(b.type) })),
+      concl: f((nd && (nd.conclusion || nd.typeString)) || ""),
+    };
+  }
+  /** 判断を一行の文字列に。`a ↔ b ⊢ a = b`（仮定が無ければ `⊢ a = b`） */
+  const sequentText = (nd, short) => {
+    const s = sequent(nd, short);
+    return (s.hyps.length ? s.hyps.map((h) => h.type).join(", ") + " " : "") + "⊢ " + (s.concl || "—");
+  };
+
+  LDR.sig = { decompose, abbrev, shortName, userName, isPrivateName, splitTopSpaces, findTop, strip, SHAPE, ORIGIN_KIND, ORIGIN_REL,
+              cleanName, argGroups, sequent, sequentText };
 })(window.LDR = window.LDR || {});

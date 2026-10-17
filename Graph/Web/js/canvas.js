@@ -26,6 +26,9 @@
       minBg: "#FEF3C7", minBd: "#D97706", minTx: "#78350F",
       sorryBg: "#FFE4E6", sorryBd: "#E11D48", sorryTx: "#881337",
       trace: "#D97706",
+      /* 選択した節点と、中心までの経路・そこから先の系譜の節点は橙の縁。その辺は種類の色・線種のまま太く、
+         外の辺・節点は薄くする（以前は経路の辺を太くするだけで、指さないと分からなかった。指摘） */
+      sel: "#EA580C", selTx: "#FFFFFF", selDimEdge: 0.16, selDimNode: 0.72,
       badgeBg: "#F5F5F4", badgeTx: "#57534E",
       muted: "#A8A29E", faint: "#57534E",
       panel: "rgba(255,255,255,.86)", panelBd: "#E7E5E4",
@@ -38,6 +41,7 @@
       minBg: "#451A03", minBd: "#D97706", minTx: "#FDE68A",
       sorryBg: "#4C0519", sorryBd: "#F43F5E", sorryTx: "#FECDD3",
       trace: "#F59E0B",
+      sel: "#F97316", selTx: "#FFFFFF", selDimEdge: 0.18, selDimNode: 0.72,
       badgeBg: "#292524", badgeTx: "#A8A29E",
       muted: "#78716C", faint: "#D6D3D1",
       panel: "rgba(28,25,23,.86)", panelBd: "#292524",
@@ -164,7 +168,14 @@
       for (const n of Object.keys(anim)) if (!(n in dv.posAll)) delete anim[n];
 
       const hl = dv.highlight, hov = st.hovered, cen = dv.center;
-      const path = dv.pathSet;      // 選んだノードから中心までの経路
+      /* 選んだノードから中心までの経路（順序区間）。あるあいだは、経路上の辺と節点を橙で描き、
+         経路の外は薄くする（指していなくても見える）。指した節点に触れる辺は従来どおり濃く出す */
+      const path = dv.pathSet, beyond = dv.beyondSet, selN = st.pathFrom;
+      const selOn = !!(path && path.size > 1);
+      /* 系譜に入る節点: 区間 [s, c] と、s から先の閉包 B。系譜の辺: 区間の中の辺、または s か B から B への辺
+         （B の節点へ区間の途中から直接入る辺は系譜ではない。s を通らない） */
+      const inLineage = (n) => (path && path.has(n)) || (beyond && beyond.has(n));
+      const edgeInLineage = (u, v) => (path && path.has(u) && path.has(v)) || (beyond && (u === selN || beyond.has(u)) && beyond.has(v));
       const NH = S.NODE_H;
 
       pp.push();
@@ -233,9 +244,16 @@
         if (!A || !B) continue;
         const dim = (hl && !(hl.has(e.u) && hl.has(e.v)));
         const trace = hl && !dim;
-        const onPath = path && path.has(e.u) && path.has(e.v);
+        const onPath = edgeInLineage(e.u, e.v);
         const hot = (hov && (e.u === hov || e.v === hov)) || onPath;
         const style = edgeStyle(e.cone, e.kind);
+        /* 色と線種は辺の種類のまま（経路を橙に塗ると型依存／値依存・主張／証明の区別が消えた。指摘）。
+           選択の経路・系譜の辺は太さと濃さだけ上げ、強調の色（橙）は節点の縁で出す。
+           公理等への経路表示（trace）だけは従来どおり琥珀 */
+        const lineCol = trace ? c.trace : edgeCol(style);
+        const weight = onPath ? 2.8 : (hot || trace) ? 2.3 : 1.25;
+        // 濃さ: 経路表示の外は dim、選択中は経路・系譜と指した辺だけ濃く、他は薄く
+        const alpha = dim ? c.dim : (hot || trace) ? 1 : selOn ? c.selDimEdge : 0.5;
 
         const thA = e.u === cen ? B.th : A.th;
         const rA = e.u === cen ? NH * 1.05 : A.r + NH / 2;
@@ -249,25 +267,25 @@
           const t0 = Math.min(0.45, (NH / 2 + 4) / L);
           const t1 = Math.max(t0 + 0.1, 1 - (NH / 2 + 4) / L);
           pp.noFill();
-          pp.stroke(trace ? c.trace : edgeCol(style));
-          pp.strokeWeight((hot || trace ? 2.3 : 1.25) / k);
-          pp.drawingContext.globalAlpha = dim ? c.dim : (hot || trace ? 1 : 0.5);
+          pp.stroke(lineCol);
+          pp.strokeWeight(weight / k);
+          pp.drawingContext.globalAlpha = alpha;
           if (style.dash) pp.drawingContext.setLineDash(style.dash.map((v2) => v2 / k));
           pp.line(ax + dx * t0, ay + dy * t0, ax + dx * t1, ay + dy * t1);
           pp.drawingContext.setLineDash([]);
           const ang = Math.atan2(dy, dx);
           pp.push(); pp.translate(ax + dx * t1, ay + dy * t1); pp.rotate(ang - Math.PI / 2);
           if (style.head === "solid") {
-            pp.noStroke(); pp.fill(trace ? c.trace : edgeCol(style));
+            pp.noStroke(); pp.fill(lineCol);
             pp.triangle(0, 1.5 / k, -3.6 / k, -6.2 / k, 3.6 / k, -6.2 / k);
           } else {
-            pp.noFill(); pp.stroke(trace ? c.trace : edgeCol(style));
+            pp.noFill(); pp.stroke(lineCol);
             pp.strokeWeight(1.9 / k);
             pp.line(-3.8 / k, -6.6 / k, 0, 0.6 / k);
             pp.line(3.8 / k, -6.6 / k, 0, 0.6 / k);
           }
           pp.pop();
-          if (e.via && e.via.length && !dim) drawViaLabel(pp, c, ax + dx * (t0 + t1) / 2, ay + dy * (t0 + t1) / 2, viaText(st, e.via), k);
+          if (e.via && e.via.length && !dim) drawViaLabel(pp, c, ax + dx * (t0 + t1) / 2, ay + dy * (t0 + t1) / 2, viaText(st, e.via, onPath), k, onPath);
           pp.drawingContext.globalAlpha = 1;
           continue;
         }
@@ -287,9 +305,9 @@
         const C1 = polar(rM, thA + bow), C2 = polar(rM, B.th + bow);
 
         pp.noFill();
-        pp.stroke(trace ? c.trace : edgeCol(style));
-        pp.strokeWeight((hot || trace ? 2.3 : 1.25) / k);
-        pp.drawingContext.globalAlpha = dim ? c.dim : (hot || trace ? 1 : 0.5);
+        pp.stroke(lineCol);
+        pp.strokeWeight(weight / k);
+        pp.drawingContext.globalAlpha = alpha;
         if (style.dash) pp.drawingContext.setLineDash(style.dash.map((v) => v / k));
         pp.bezier(P0.x, P0.y, C1.x, C1.y, C2.x, C2.y, P3.x, P3.y);
         pp.drawingContext.setLineDash([]);
@@ -297,18 +315,20 @@
         // 矢じり。実線は塗り三角、点線は開いた山形。形でも区別できるようにする。
         pp.push(); pp.translate(P3.x, P3.y); pp.rotate(B.th - Math.PI / 2);
         if (style.head === "solid") {
-          pp.noStroke(); pp.fill(trace ? c.trace : edgeCol(style));
+          pp.noStroke(); pp.fill(lineCol);
           pp.triangle(0, 1.5 / k, -3.6 / k, -6.2 / k, 3.6 / k, -6.2 / k);
         } else {
-          pp.noFill(); pp.stroke(trace ? c.trace : edgeCol(style));
+          pp.noFill(); pp.stroke(lineCol);
           pp.strokeWeight(1.9 / k);
           pp.line(-3.8 / k, -6.6 / k, 0, 0.6 / k);
           pp.line(3.8 / k, -6.6 / k, 0, 0.6 / k);
         }
         pp.pop();
         if (e.via && e.via.length && !dim) {
-          const q = polar(rB - 22 / Math.max(k, 0.4), B.th);
-          drawViaLabel(pp, c, q.x, q.y, viaText(st, e.via), k);
+          /* 系譜の辺は、畳んだ派生・断片の名前まで書く（経路の途中が「畳まれて欠けている」と見えた。指摘）。
+             位置は辺の中ほど（終点の手前だと層を跨ぐ辺で節点に重なる） */
+          const q = onPath ? polar(rM, lerpAngle(thA, B.th, 0.5) + bow) : polar(rB - 22 / Math.max(k, 0.4), B.th);
+          drawViaLabel(pp, c, q.x, q.y, viaText(st, e.via, onPath), k, onPath);
         }
         pp.drawingContext.globalAlpha = 1;
       }
@@ -321,18 +341,29 @@
         const dim = hl && !hl.has(n);
         const isHov = hov === n, isSel = st.selected === n;
         const w = a.w, h = NH;
-        pp.drawingContext.globalAlpha = (dim ? c.dim : 1) * a.o;
+        const onPath = inLineage(n);
+        // 選択中は、経路・系譜の外の節点を薄くする（指した節点は濃いまま）
+        const nodeAlpha = dim ? c.dim : (selOn && !onPath && !isHov && !isSel) ? c.selDimNode : 1;
+        pp.drawingContext.globalAlpha = nodeAlpha * a.o;
 
-        const onPath = path && path.has(n);
         const nd = st.nodes[n];
         /* 外部の宣言（対象の外で定義されたもの）とモジュール粒度の節点は、縁をパッケージの色に
            する（Mathlib / cslib / core …。pkg.colorOf）。どのパッケージに依っているかが
-           図の上で読める。対象のパッケージの節点は既定の縁のまま。 */
+           図の上で読める。対象のパッケージの節点は既定の縁のまま。
+           選択した節点と中心までの経路上の節点は橙の縁（辺と同じ色）。 */
         const pkgC = pkgColorOf(n, nd, st);
-        pp.fill(stl.bg);
-        pp.stroke(isSel ? c.center : onPath ? CONE[a.cone].wash : isHov ? CONE[a.cone].wash : (pkgC || stl.bd));
-        pp.strokeWeight((isSel ? 2.4 : onPath ? 2.2 : isHov ? 2 : pkgC ? 1.6 : 1.1) / k);
+        /* 選択した節点は中心と同じ流儀で **塗りつぶし**（橙の地に白い字）、系譜の節点は縁だけ橙。
+           薄い地や縁だけでは、系譜が広いとき「どれを選んだか」が区別できなかった（指摘） */
+        pp.fill(isSel ? c.sel : stl.bg);
+        pp.stroke(isSel || onPath ? c.sel : isHov ? CONE[a.cone].wash : (pkgC || stl.bd));
+        pp.strokeWeight((isSel ? 2 : onPath ? 2.2 : isHov ? 2 : pkgC ? 1.6 : 1.1) / k);
         pp.rect(a.x - w / 2, a.y - h / 2, w, h, stl.pill ? h / 2 : 9);
+        if (isSel) {   // 選択の輪（外側にもう一本）。密な層でも見失わない
+          pp.noFill(); pp.stroke(c.sel); pp.strokeWeight(1.6 / k);
+          pp.drawingContext.globalAlpha = 0.8 * a.o;
+          pp.rect(a.x - w / 2 - 5, a.y - h / 2 - 5, w + 10, h + 10, stl.pill ? h / 2 + 5 : 13);
+          pp.drawingContext.globalAlpha = nodeAlpha * a.o;
+        }
 
         const dotC = KIND_DOT[st.granularity === "module" ? "unknown" : (nd ? nd.kind : "unknown")] || KIND_DOT.unknown;
         /* 派生の札。畳んでいれば「+k」（k = この中心から見える派生の数。facetReach）、
@@ -340,11 +371,13 @@
         const fc = st.granularity === "decl" && dv.facetCount ? (dv.facetCount[n] || 0) : 0;
         const badgeW = fc ? 24 : 0;
         pp.noStroke(); pp.fill(dotC);
+        if (isSel) { pp.stroke(c.selTx); pp.strokeWeight(1 / k); }   // 橙の地でも種別の点が見えるよう白で縁取る
         if (w < 78) {
           pp.circle(a.x, a.y, 9);
         } else {
           pp.circle(a.x - w / 2 + 14, a.y, 8);
-          pp.fill(stl.tx); pp.textSize(13);
+          pp.noStroke();
+          pp.fill(isSel ? c.selTx : stl.tx); pp.textSize(13);
           pp.textAlign(pp.LEFT, pp.CENTER);
           pp.text(fit(pp, (dv.labels && dv.labels[n]) || n, w - 32 - badgeW), a.x - w / 2 + 24, a.y + 0.5);
         }
@@ -365,7 +398,7 @@
         hitBoxes.push({ kind: "node", name: n, x: a.x - w / 2, y: a.y - h / 2, w, h });
         /* 派生の札はノードの矩形の内側にあるので、当たり判定はノードの後に積む
            （後から積んだものが優先。先に積むと押してもノードの選択になる。実障害）。 */
-        if (fc) drawClusterBadge(pp, c, dv, n, fc, a.x + w / 2 - 27, a.y - 8, stl.bd, k, (dim ? c.dim : 1) * a.o);
+        if (fc) drawClusterBadge(pp, c, dv, n, fc, a.x + w / 2 - 27, a.y - 8, stl.bd, k, nodeAlpha * a.o);
         pp.drawingContext.globalAlpha = 1;
       }
 
@@ -433,20 +466,24 @@
 
     /* 辺が畳まれた派生・断片を経由しているとき、その種類（単射性・場合分け…）を辺の
        終点の手前に小さく書く。「pair_inj は mk を使う」ではなく「mk の単射性を使う」と読める。 */
-    function viaText(st, via) {
+    /* withNames: 系譜の辺では種類だけでなく経由した宣言の名前（末尾二成分）まで出す。二件を超える分は ×n */
+    function viaText(st, via, withNames) {
       const K = LDR.sig.ORIGIN_KIND;
-      const kinds = [...new Set(via.map((g) => {
-        const nd = st.nodes[g];
-        return nd && K[nd.originKind] ? K[nd.originKind].ja : "経由";
-      }))];
+      const kindOf = (g) => { const nd = st.nodes[g]; return nd && K[nd.originKind] ? K[nd.originKind].ja : "経由"; };
+      if (withNames) {
+        const shown = via.slice(0, 2).map((g) => `${kindOf(g)} ${LDR.sig.shortName(g)}`);
+        return shown.join(" · ") + (via.length > 2 ? ` ほか ${via.length - 2}` : "");
+      }
+      const kinds = [...new Set(via.map(kindOf))];
       return kinds.join("·") + (via.length > kinds.length ? ` ×${via.length}` : "");
     }
-    function drawViaLabel(pp, c, x, y, text, k) {
-      pp.textSize(9.5 / k);
-      const w = pp.textWidth(text) + 8 / k, h = 13 / k;
+    function drawViaLabel(pp, c, x, y, text, k, strong) {
+      pp.textSize((strong ? 10.5 : 9.5) / k);
+      const w = pp.textWidth(text) + 10 / k, h = (strong ? 15 : 13) / k;
       pp.noStroke(); pp.fill(c.panel);
       pp.rect(x - w / 2, y - h / 2, w, h, 4 / k);
-      pp.fill(c.faint); pp.textAlign(pp.CENTER, pp.CENTER);
+      if (strong) { pp.noFill(); pp.stroke(c.sel); pp.strokeWeight(1 / k); pp.rect(x - w / 2, y - h / 2, w, h, 4 / k); pp.noStroke(); }
+      pp.fill(strong ? c.sel : c.faint); pp.textAlign(pp.CENTER, pp.CENTER);
       pp.text(text, x, y + 0.5 / k);
     }
 
@@ -562,7 +599,8 @@
       /* 凡例は既定では一行に畳み、指したときだけ全体を出す。開いたままの 268px × 150px の箱は
          左上の節点を隠していた（実測）。狭い画面でも同じ一行で足りる。 */
       const pkgRows = [...pkgs.entries()].sort((a, b) => b[1] - a[1]);
-      const compactW = 4 + rows.length * 30 + 150 + (pkgRows.length ? 14 * pkgRows.length + 70 : 0);
+      const selOn = !!(dv.pathSet && dv.pathSet.size > 1);
+      const compactW = 4 + rows.length * 30 + 150 + (pkgRows.length ? 14 * pkgRows.length + 70 : 0) + (selOn ? 124 : 0);
       const hovering = pp.mouseX >= legendRect.x && pp.mouseX <= legendRect.x + legendRect.w
                     && pp.mouseY >= legendRect.y && pp.mouseY <= legendRect.y + legendRect.h;
       if (W < 760 || !hovering) {
@@ -592,6 +630,12 @@
           }
           pp.noStroke(); pp.fill(c.muted);
           pp.text("パッケージ", tx + 4, y0 + 7); tx += 50;
+        }
+        if (selOn) {   // 選択中: 塗りの橙 = 選択、橙の縁 = 経路・系譜、その辺は太く、他は薄い
+          pp.noStroke(); pp.fill(c.sel); pp.rect(tx + 8, y0 + 2, 10, 10, 3);
+          pp.noFill(); pp.stroke(c.sel); pp.strokeWeight(2); pp.rect(tx + 22, y0 + 2, 12, 10, 3);
+          pp.noStroke(); pp.fill(c.muted);
+          pp.text("選択 · 経路・系譜", tx + 40, y0 + 7); tx += 118;
         }
         pp.fill(c.muted); pp.text("▸ 指すと展開", tx + 6, y0 + 7);
         legendRect = { x: x0, y: y0 - 4, w: compactW, h: 22 };

@@ -80,8 +80,10 @@
     if (t.dataset.hist !== undefined) { S.actions.jumpHist(t.dataset.hist); return; }
     if (t.dataset.pin !== undefined) { toast(S.actions.applyPin(t.dataset.pin).msg); return; }
     if (t.dataset.unpin !== undefined) { S.actions.removePin(t.dataset.unpin); return; }
-    if (t.dataset.filter === "sorry") { S.actions.toggleOnlySorry(); return; }
+    // 左の絞り込み。openall は派生の開閉、clear は全解除、それ以外は監査の札（panels.AUDIT の id）
     if (t.dataset.filter === "openall") { S.actions.toggleOpenAll(); return; }
+    if (t.dataset.filter === "clear") { S.actions.clearListFilters(); return; }
+    if (t.dataset.filter !== undefined) { S.actions.toggleListFilter(t.dataset.filter); return; }
   }
 
   /* ---------- キーボード ---------- */
@@ -349,7 +351,6 @@
     $("btnZoomIn").addEventListener("click", C.zoomIn);
     $("btnZoomOut").addEventListener("click", C.zoomOut);
     $("btnFit").addEventListener("click", C.reset);
-    $("btnClearKinds").addEventListener("click", S.actions.clearKinds);
     $("btnHistClear").addEventListener("click", () => { S.actions.clearHist(); toast("履歴を消去しました"); });
     $("themeBtn").addEventListener("click", () =>
       applyTheme(!document.documentElement.classList.contains("dark")));
