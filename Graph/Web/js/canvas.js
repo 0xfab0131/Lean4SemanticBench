@@ -28,7 +28,8 @@
       trace: "#D97706",
       /* 選択した節点と、中心までの経路・そこから先の系譜の節点は橙の縁。その辺は種類の色・線種のまま太く、
          外の辺・節点は薄くする（以前は経路の辺を太くするだけで、指さないと分からなかった。指摘） */
-      sel: "#EA580C", selTx: "#FFFFFF", selDimEdge: 0.16, selDimNode: 0.72,
+      /* 選択した節点そのものは水色の蛍光（経路・系譜の橙と一目で別物）。sel は経路・系譜の縁の色 */
+      sel: "#EA580C", selNode: "#67E8F9", selNodeBd: "#0891B2", selTx: "#083344", selDimEdge: 0.16, selDimNode: 0.72,
       badgeBg: "#F5F5F4", badgeTx: "#57534E",
       muted: "#A8A29E", faint: "#57534E",
       panel: "rgba(255,255,255,.86)", panelBd: "#E7E5E4",
@@ -41,7 +42,7 @@
       minBg: "#451A03", minBd: "#D97706", minTx: "#FDE68A",
       sorryBg: "#4C0519", sorryBd: "#F43F5E", sorryTx: "#FECDD3",
       trace: "#F59E0B",
-      sel: "#F97316", selTx: "#FFFFFF", selDimEdge: 0.18, selDimNode: 0.72,
+      sel: "#F97316", selNode: "#22D3EE", selNodeBd: "#A5F3FC", selTx: "#083344", selDimEdge: 0.18, selDimNode: 0.72,
       badgeBg: "#292524", badgeTx: "#A8A29E",
       muted: "#78716C", faint: "#D6D3D1",
       panel: "rgba(28,25,23,.86)", panelBd: "#292524",
@@ -352,14 +353,14 @@
            図の上で読める。対象のパッケージの節点は既定の縁のまま。
            選択した節点と中心までの経路上の節点は橙の縁（辺と同じ色）。 */
         const pkgC = pkgColorOf(n, nd, st);
-        /* 選択した節点は中心と同じ流儀で **塗りつぶし**（橙の地に白い字）、系譜の節点は縁だけ橙。
-           薄い地や縁だけでは、系譜が広いとき「どれを選んだか」が区別できなかった（指摘） */
-        pp.fill(isSel ? c.sel : stl.bg);
-        pp.stroke(isSel || onPath ? c.sel : isHov ? CONE[a.cone].wash : (pkgC || stl.bd));
+        /* 選択した節点は中心と同じ流儀で **塗りつぶし**。色は水色の蛍光（経路・系譜の橙とは別の色相にして
+           「どれを選んだか」を一目で分ける。橙の塗りでは系譜の橙の縁と紛れた。指摘）。系譜の節点は縁だけ橙 */
+        pp.fill(isSel ? c.selNode : stl.bg);
+        pp.stroke(isSel ? c.selNodeBd : onPath ? c.sel : isHov ? CONE[a.cone].wash : (pkgC || stl.bd));
         pp.strokeWeight((isSel ? 2 : onPath ? 2.2 : isHov ? 2 : pkgC ? 1.6 : 1.1) / k);
         pp.rect(a.x - w / 2, a.y - h / 2, w, h, stl.pill ? h / 2 : 9);
-        if (isSel) {   // 選択の輪（外側にもう一本）。密な層でも見失わない
-          pp.noFill(); pp.stroke(c.sel); pp.strokeWeight(1.6 / k);
+        if (isSel) {   // 選択の輪（外側にもう一本、同じ水色）。密な層でも見失わない
+          pp.noFill(); pp.stroke(c.selNodeBd); pp.strokeWeight(1.6 / k);
           pp.drawingContext.globalAlpha = 0.8 * a.o;
           pp.rect(a.x - w / 2 - 5, a.y - h / 2 - 5, w + 10, h + 10, stl.pill ? h / 2 + 5 : 13);
           pp.drawingContext.globalAlpha = nodeAlpha * a.o;
@@ -371,7 +372,7 @@
         const fc = st.granularity === "decl" && dv.facetCount ? (dv.facetCount[n] || 0) : 0;
         const badgeW = fc ? 24 : 0;
         pp.noStroke(); pp.fill(dotC);
-        if (isSel) { pp.stroke(c.selTx); pp.strokeWeight(1 / k); }   // 橙の地でも種別の点が見えるよう白で縁取る
+        if (isSel) { pp.stroke(c.selTx); pp.strokeWeight(1 / k); }   // 水色の地でも種別の点が見えるよう濃い色で縁取る
         if (w < 78) {
           pp.circle(a.x, a.y, 9);
         } else {
@@ -631,8 +632,8 @@
           pp.noStroke(); pp.fill(c.muted);
           pp.text("パッケージ", tx + 4, y0 + 7); tx += 50;
         }
-        if (selOn) {   // 選択中: 塗りの橙 = 選択、橙の縁 = 経路・系譜、その辺は太く、他は薄い
-          pp.noStroke(); pp.fill(c.sel); pp.rect(tx + 8, y0 + 2, 10, 10, 3);
+        if (selOn) {   // 選択中: 水色の塗り = 選択、橙の縁 = 経路・系譜、その辺は太く、他は薄い
+          pp.noStroke(); pp.fill(c.selNode); pp.rect(tx + 8, y0 + 2, 10, 10, 3);
           pp.noFill(); pp.stroke(c.sel); pp.strokeWeight(2); pp.rect(tx + 22, y0 + 2, 12, 10, 3);
           pp.noStroke(); pp.fill(c.muted);
           pp.text("選択 · 経路・系譜", tx + 40, y0 + 7); tx += 118;
