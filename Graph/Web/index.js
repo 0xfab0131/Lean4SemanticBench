@@ -137,8 +137,8 @@
     el.addEventListener("pointermove", (e) => {
       if (!start) return;
       const d = which === "left" ? (e.clientX - start.x) : (start.x - e.clientX);
-      target.style.width = Math.max(which === "left" ? 220 : 280, Math.min(760, start.w + d)) + "px";
-      fitWidths();
+      target.style.width = Math.max(which === "left" ? 220 : 280, Math.min(Math.round(window.innerWidth * 0.6), start.w + d)) + "px";
+      fitWidths(which);
     });
     const end = () => {
       if (!start) return;
@@ -232,7 +232,7 @@
          下限より小さくはしない（190px まで縮めると札が欄からはみ出した。実測）。
          幅が足りない画面では左の一覧は重ね表示（drawer）になるので、ここでの上限は三枚並ぶ画面の話 */
       const min = which === "left" ? 220 : 280;
-      const cap = Math.max(min, Math.round(window.innerWidth * (which === "left" ? 0.24 : 0.34)));
+      const cap = Math.max(min, Math.round(window.innerWidth * (which === "left" ? 0.3 : 0.5)));
       const def = which === "left" ? 280 : 330;
       el.style.width = Math.max(min, Math.min(Number.isFinite(saved) ? saved : def, cap)) + "px";
     }
@@ -541,18 +541,23 @@
      OS の拡大率が高い画面では CSS 上の幅が 1000px 前後になり、三枚で左 190・右 326・中央 434 に
      潰れて中央の見出しも操作列も読めなかった（実測）。 */
   const BP = { both: 990, right: 820 };
-  const MIN = { left: 220, right: 280, center: 480 };
+  const MIN = { left: 220, right: 280, center: 480, centerDrag: 320 };
   let autoState = null, userTouched = { left: false, right: false };
-  function fitWidths() {
+  /* prefer: 利用者が帯を引いている側（"left" / "right"）。その側の幅は尊重し、まず反対側を下限まで縮め、
+     それでも足りなければ中央を 320px まで譲る（以前は中央 480px を常に守り、右を広げても即座に
+     押し戻されて調整できなかった。指摘）。自動（画面幅の変化）のときは中央 480px を守る */
+  function fitWidths(prefer) {
     const w = window.innerWidth;
     const side = $("sidebar"), right = $("sideR");
     const L = !side.classList.contains("hidden") && !side.classList.contains("drawer");
     const R = !right.classList.contains("hidden");
     let l = L ? (parseInt(side.style.width, 10) || 280) : 0;
     let r = R ? (parseInt(right.style.width, 10) || 330) : 0;
-    let over = l + r + MIN.center + (L ? 5 : 0) + (R ? 5 : 0) - w;
-    if (over > 0 && R) { const d = Math.min(over, Math.max(0, r - MIN.right)); r -= d; over -= d; }
-    if (over > 0 && L) { const d = Math.min(over, Math.max(0, l - MIN.left)); l -= d; over -= d; }
+    const center = prefer ? MIN.centerDrag : MIN.center;
+    let over = l + r + center + (L ? 5 : 0) + (R ? 5 : 0) - w;
+    const shrinkR = () => { if (over > 0 && R) { const d = Math.min(over, Math.max(0, r - MIN.right)); r -= d; over -= d; } };
+    const shrinkL = () => { if (over > 0 && L) { const d = Math.min(over, Math.max(0, l - MIN.left)); l -= d; over -= d; } };
+    if (prefer === "right") { shrinkL(); shrinkR(); } else { shrinkR(); shrinkL(); }
     if (L) side.style.width = l + "px";
     if (R) right.style.width = r + "px";
   }
