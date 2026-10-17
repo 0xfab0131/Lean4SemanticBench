@@ -724,6 +724,10 @@
     };
 
     pp.mouseWheel = function (e) {
+      /* p5 のホイールは window で受ける。キャンバスの矩形の中でも、その上に別の要素（レポートの
+         プレビュー等）が重なっていればその要素のスクロールであって拡大縮小ではない。実際の対象で判定する
+         （プレビューの上でホイールを回すと下のキャンバスが拡大し、文章が動かなかった。実測） */
+      if (e && e.target && !host.contains(e.target)) return;
       pp.loop();
       if (pp.mouseX < 0 || pp.mouseY < 0 || pp.mouseX > pp.width || pp.mouseY > pp.height) return;
       const st = S.state;

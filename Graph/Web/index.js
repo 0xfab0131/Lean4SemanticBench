@@ -318,14 +318,22 @@
     };
     for (const d of pops) {
       d.addEventListener("toggle", () => {
-        if (d.open) { for (const o of pops) if (o !== d) o.open = false; if (d.id === "dReport") renderReportPanel(); }
+        if (d.open) for (const o of pops) if (o !== d) o.open = false;
         placePanel(d);
       });
     }
     window.addEventListener("resize", () => pops.forEach(placePanel), { passive: true });
+    /* 外を押せば閉じる（浮遊パネルも、レポートの差し込みも）。Esc は差し込み → 浮遊パネルの順 */
     document.addEventListener("click", (e) => {
       for (const d of pops) if (d.open && !d.contains(e.target) && !e.target.closest("dialog")) d.open = false;
+      const dlg = $("reportDlg");
+      if (dlg.open && !dlg.contains(e.target) && !e.target.closest("#btnReport")) dlg.close();
     }, true);
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if ($("reportDlg").open) { $("reportDlg").close(); return; }
+      for (const d of pops) if (d.open) d.open = false;
+    });
     // 履歴・ピンの中身が組み直されたら位置を取り直す（高さが変わる）
     S.subscribe(() => pops.forEach(placePanel));
 
@@ -459,7 +467,7 @@
     ];
     $("reportSubject").innerHTML = `<span class="text-[11.5px] text-stone-500 mr-1">主語</span>` + subj.map((s) => `<button data-rsubj="${s.k}" ${s.n ? "" : "disabled"}
         title="${s.t}${s.n ? "" : "（いまは無い）"}"
-        class="px-2 py-1 rounded-md text-[11.5px] border ${reportOpts.kind === s.k
+        class="px-2 py-0.5 rounded-md text-[11px] border max-w-full ${reportOpts.kind === s.k
           ? "bg-stone-900 text-white border-stone-900 dark:bg-stone-100 dark:text-stone-900"
           : s.n ? "bg-white text-stone-600 border-stone-300 hover:bg-stone-100 dark:bg-stone-900 dark:text-stone-300 dark:border-stone-600" : "text-stone-300 border-stone-200 dark:text-stone-600 dark:border-stone-700"}">
         ${s.l}${s.n ? ` <span class="font-mono text-[10.5px] opacity-80">${short(s.n)}</span>` : ""}</button>`).join("");
@@ -477,35 +485,42 @@
     return LDR.report.build(reportOpts.kind, { sections: [...reportOpts.sections], depth: reportOpts.depth, ...reportOpts.style });
   }
   function setupReport() {
-    $("dReport").addEventListener("click", (e) => {
+    /* プレビュー。モーダルではない差し込み（右端）に出す。章のパネルは開いたままにでき、章・主語・深さを
+       変えると開いているプレビューは作り直す（以前はモーダルで、章を変えるたびに閉じて開き直す必要があった。指摘） */
+    const previewReport = () => {
+      const r = buildReport();
+      if (!r.ok) { toast(r.msg); return; }
+      const ta = $("reportText");
+      const atTop = ta.scrollTop;
+      ta.value = r.text;
+      ta.scrollTop = Math.min(atTop, ta.scrollHeight);
+      $("reportDlgInfo").textContent = `${LDR.sig.shortName(r.subject)} · ${r.text.split("\n").length} 行 · ${(r.text.length / 1024).toFixed(1)} KB`;
+      if (!$("reportDlg").open) $("reportDlg").show();
+    };
+    const refreshIfOpen = () => { if ($("reportDlg").open) previewReport(); };
+    /* 開くときの主語: 選択中の宣言（中心と異なる）があればそれ（中心との経路が入る）、無ければ中心。
+       以前は常に中心で、選んだ宣言について読みたいときに毎回切り替えていた（指摘） */
+    const openReport = () => {
+      const st = S.state, dv = S.derived;
+      if ($("reportDlg").open) { $("reportDlg").close(); return; }
+      reportOpts.kind = st.selected && st.selected !== dv.center ? "selected" : "center";
+      renderReportPanel();
+      previewReport();
+    };
+    $("btnReport").addEventListener("click", openReport);
+    $("reportOpts").addEventListener("click", (e) => {
       const b = e.target.closest("[data-rsubj],[data-rdepth],[data-rsec],[data-rstyle]");
       if (!b) return;
       if (b.dataset.rsubj) { reportOpts.kind = b.dataset.rsubj; renderReportPanel(); }
       else if (b.dataset.rdepth) { reportOpts.depth = +b.dataset.rdepth; renderReportPanel(); }
       else if (b.dataset.rsec) { b.checked ? reportOpts.sections.add(b.dataset.rsec) : reportOpts.sections.delete(b.dataset.rsec); }
       else if (b.dataset.rstyle) { reportOpts.style[b.dataset.rstyle] = b.checked; }
+      refreshIfOpen();
     });
-    $("reportAll").addEventListener("click", () => { reportOpts.sections = new Set(LDR.report.ALL); renderReportPanel(); });
-    $("reportNone").addEventListener("click", () => { reportOpts.sections = new Set(["claim"]); renderReportPanel(); });
+    // 要約 = 主張・型依存・公理の由来・導出図・計量（「主張のみ」では主張の原文と束縛しか残らず、読む材料が無かった。指摘）
+    $("reportAll").addEventListener("click", () => { reportOpts.sections = new Set(LDR.report.ALL); renderReportPanel(); refreshIfOpen(); });
+    $("reportNone").addEventListener("click", () => { reportOpts.sections = new Set(["claim", "type", "axioms", "figure", "metrics"]); renderReportPanel(); refreshIfOpen(); });
     const fileName = (r) => `ldr-${LDR.sig.shortName(r.subject).replace(/[^\w.-]+/g, "_")}-${new Date().toISOString().slice(0, 10)}.md`;
-    $("reportPreview").addEventListener("click", () => {
-      const r = buildReport();
-      if (!r.ok) { toast(r.msg); return; }
-      $("reportText").value = r.text;
-      $("reportDlgInfo").textContent = `${LDR.sig.shortName(r.subject)} · ${r.text.split("\n").length} 行 · ${(r.text.length / 1024).toFixed(1)} KB`;
-      $("reportDlg").showModal();
-    });
-    $("reportCopy").addEventListener("click", async () => {
-      const r = buildReport();
-      if (!r.ok) { toast(r.msg); return; }
-      toast((await copyText(r.text)) ? `レポートをコピーしました（${r.text.split("\n").length} 行）` : "コピーできませんでした");
-    });
-    $("reportSave").addEventListener("click", () => {
-      const r = buildReport();
-      if (!r.ok) { toast(r.msg); return; }
-      download(fileName(r), r.text, "text/markdown");
-      toast("レポートを保存しました");
-    });
     $("reportDlgCopy").addEventListener("click", async () => {
       toast((await copyText($("reportText").value)) ? "レポートをコピーしました" : "コピーできませんでした");
     });
@@ -549,6 +564,9 @@
     side.classList.toggle("drawer", drawer);
     if (rz) rz.classList.toggle("hidden", drawer || side.classList.contains("hidden"));
     if (bd) bd.classList.toggle("hidden", !(drawer && !side.classList.contains("hidden")));
+    // 上部バーの開閉ボタンに、いま開いているかを示す
+    $("btnSide").setAttribute("aria-pressed", String(!side.classList.contains("hidden")));
+    $("btnSideR").setAttribute("aria-pressed", String(!$("sideR").classList.contains("hidden")));
   }
   function applyResponsive() {
     if (focusOn) return;          // 集中表示は自動制御より優先する
@@ -575,7 +593,7 @@
     const hidden = el.classList.toggle("hidden");
     const rz = document.querySelector(`[data-resize="${which}"]`);
     if (rz) rz.classList.toggle("hidden", hidden);
-    if (which === "left") syncDrawer();
+    syncDrawer();
     fitWidths();
   }
 

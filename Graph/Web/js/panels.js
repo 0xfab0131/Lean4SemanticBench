@@ -1028,7 +1028,7 @@
     const sub = concl && !(open && canOpen) ? `<div class="cl" title="${esc(nd.conclusion || nd.typeString || "")}">⊢ ${esc(concl)}</div>` : "";
     const nested = open && canOpen
       ? `<div class="nest" style="border-color:${col}66">${derivation(name, st, depth - 1, seen, met)}</div>` : "";
-    return `<div class="prem">${toggle}${head}${sub}${nested}</div>`;
+    return `<div class="prem" style="border-left-color:${col}88">${toggle}${head}${sub}${nested}</div>`;
   }
 
   function derivation(name, st, depth, seen, met) {

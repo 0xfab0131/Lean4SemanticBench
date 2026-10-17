@@ -99,26 +99,29 @@
   /* 札の幅は em（文字サイズに比例）。px で固定すると、文字が指定より大きく描かれる環境で
      札が枠からはみ出して本文に密着した（「引数{F」「大き型 73」。実測） */
   .pv .lbl { font-size: 10px; color: #a8a29e; flex: none; white-space: nowrap; min-width: 3.4em; padding-right: .4em; }
-  .pv .sig-sec { display: flex; gap: 10px; padding: 5px 6px 5px 8px; border-left: 3px solid #d6d3d1; }
+  .pv .sig-sec { display: flex; gap: 8px; padding: 4px 6px 4px 8px; border-left: 3px solid #d6d3d1; }
   .pv .sig-sec + .sig-sec { border-top: 1px solid #e7e5e4; }
   .dark .pv .sig-sec + .sig-sec { border-top-color: #44403c; }
   .pv .sig-sec .lbl { padding-top: 2px; width: 3.4em; }
-  .pv .sig-line { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+  .pv .sig-line { font-size: 11.5px; line-height: 1.5; overflow-wrap: anywhere; }
   .pv .fig-rule { display: flex; align-items: center; gap: 8px; margin: 6px 0 4px; }
   .pv .fig-rule > i { flex: 1; height: 1px; background: #a8a29e; }
   .pv .fig-rule > b { font: 10px ui-monospace, monospace; color: #57534e; max-width: 60%; overflow: hidden;
                       text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
   .dark .pv .fig-rule > b { color: #a8a29e; }
-  .pv .prem { display: grid; grid-template-columns: 14px 1fr 18px; column-gap: 4px; padding: 2px 0; align-items: center; }
-  .pv .prem:hover { background: #f5f5f4; border-radius: 4px; }
+  /* 前提の行。左の縁は役割の色（公理 橙 / 補題 藍。行側の inline で指定）。結論は二行まで折り返す
+     （一行で切ると狭い欄で `⊢ (Polynomial.C a).c…` のように読めなかった。実測） */
+  .pv .prem { display: grid; grid-template-columns: 14px 1fr 18px; column-gap: 4px; padding: 2px 0 2px 3px; align-items: center;
+              border-left: 2px solid transparent; border-radius: 0 4px 4px 0; }
+  .pv .prem:hover { background: #f5f5f4; }
   .dark .pv .prem:hover { background: #1c1917; }
   .pv .prem .nm { display: flex; align-items: center; gap: 5px; min-width: 0; cursor: default; }
   .pv .prem .nm[data-deriv] { cursor: pointer; }
   .pv .prem .nm[data-deriv]:hover .t { text-decoration: underline dotted; }
   .pv .prem .go { grid-column: 3; width: 18px; height: 18px; font-size: 11px; color: #a8a29e; border-radius: 4px; }
   .pv .prem .go:hover { color: #4338ca; background: #e0e7ff; }
-  .pv .prem .cl { grid-column: 2 / span 2; font: 10px ui-monospace, monospace; color: #78716c; overflow: hidden;
-                  text-overflow: ellipsis; white-space: nowrap; }
+  .pv .prem .cl { grid-column: 2 / span 2; font: 10px/1.4 ui-monospace, monospace; color: #78716c; overflow: hidden;
+                  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
   .pv .prem .nest { grid-column: 2 / span 2; margin: 4px 0 6px; padding-left: 8px; border-left: 2px solid #e7e5e4; }
   .pv .fig-concl { font: 11px/1.45 ui-monospace, monospace; color: #1c1917; overflow-wrap: anywhere; }
   .dark .pv .fig-concl { color: #fafaf9; }
@@ -139,6 +142,13 @@
   }
   #toolRow.focus-min > label { display: none; }
   #toolRow.focus-min #segEdge, #toolRow.focus-min #segRef { display: none; }
+  /* 上部バーの開閉ボタン。開いている側は押された見た目（index.js が aria-pressed を保つ） */
+  header button[aria-pressed="true"] { background: #e7e5e4; color: #1c1917; }
+  .dark header button[aria-pressed="true"] { background: #44403c; color: #fafaf9; }
+  /* レポートのプレビュー。右端に縦いっぱいの差し込み（モーダルではない。章の浮遊パネルと同時に使う）。
+     幅は画面の 46%（最小 420px）。本文の右パネルの上に重なるが、中央のグラフと章のパネルは見える */
+  #reportDlg { position: fixed; inset: 40px 0 0 auto; margin: 0; width: max(640px, 62vw); max-width: 96vw;
+               height: calc(100vh - 40px); max-height: none; border-radius: 0; z-index: 55; }
   /* 三枚が並ばない幅で一覧を開いたときの重ね表示（index.js syncDrawer）。中央の幅を奪わない */
   #sidebar.drawer { position: absolute; left: 0; top: 0; bottom: 0; z-index: 30; width: 280px !important;
                     box-shadow: 8px 0 24px rgba(0,0,0,.14); }
@@ -152,40 +162,21 @@
   <!-- ============ 上部バー ============ -->
   <!-- backdrop-blur はスタッキング文脈を作るので、中の浮遊パネル（履歴・ピン・レポート・凡例）が
        右パネルの下に描かれて見切れる（実測）。上部バー自体を最前面に置く。 -->
-  <header class="shrink-0 h-12 px-3 flex items-center gap-2 border-b border-stone-200 dark:border-stone-800
+  <!-- 高さは 40px。48px では本文の高さを無駄に奪っていた（指摘）。ボタンは 32px で揃える -->
+  <header class="shrink-0 h-10 px-2 flex items-center gap-1.5 border-b border-stone-200 dark:border-stone-800
                  bg-white/80 dark:bg-stone-900/80 backdrop-blur-sm" style="position:relative;z-index:60">
-    <button id="btnSide" class="shrink-0 w-9 h-9 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-500 text-[16px]" title="一覧の開閉">☰</button>
-    <span class="shrink-0 text-[14px] font-medium tracking-tight hidden lg:inline"
+    <!-- 一覧の開閉。開いている間は押された見た目（aria-pressed。CSS は上の style） -->
+    <button id="btnSide" aria-pressed="true" class="shrink-0 w-8 h-8 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-500 text-[15px]" title="宣言の一覧を開く／閉じる">☰</button>
+    <span class="shrink-0 text-[13px] font-medium tracking-tight hidden lg:inline"
           title="Lean4SemanticBench">L4SB</span>
-    <div class="shrink-0 w-px h-5 bg-stone-200 dark:bg-stone-700 mx-1"></div>
+    <div class="shrink-0 w-px h-5 bg-stone-200 dark:bg-stone-700 mx-0.5"></div>
     <!-- 長い宣言名がボタン列に食い込まないよう、ここだけが縮む -->
     <div id="crumb" class="flex-1 min-w-0 overflow-hidden px-1"></div>
 
-    <!-- 右パネルの下に畳んであった 履歴・ピン留め・凡例 と、新しい レポート は、上部バーの
-         浮遊パネル（details.pop）に置く。パネルの下は視線が届かず、本文の高さも奪っていた（指摘）。 -->
-    <details id="dReport" class="pop shrink-0">
-      <summary class="px-3 h-9 flex items-center rounded-md text-[13px] border border-stone-300 dark:border-stone-600
-                      hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer select-none list-none" title="証明の構造を Markdown のレポートにして写す・保存する">📄 レポート ▾</summary>
-      <div class="popPanel w-[min(440px,92vw)]">
-        <div class="text-[11px] text-stone-500 leading-relaxed">主語を選び、章を選んで「プレビュー」。事実は元の依存グラフで測り、型依存／値依存・公理の由来・導出図・基盤・境界・経路を Markdown にまとめます。</div>
-        <div class="flex items-center gap-1 flex-wrap" id="reportSubject"></div>
-        <div id="reportSections" class="grid grid-cols-1 gap-y-0.5 text-[11.5px]"></div>
-        <div class="flex items-center gap-2 text-[11.5px] text-stone-500">導出図の深さ
-          <span id="reportDepth" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800"></span>
-          <span class="flex-1"></span>
-          <button id="reportAll" class="px-2 py-0.5 rounded-md text-[11px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800">全章</button>
-          <button id="reportNone" class="px-2 py-0.5 rounded-md text-[11px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800">主張のみ</button>
-        </div>
-        <div class="flex items-center gap-2 pt-1 border-t border-stone-200 dark:border-stone-700">
-          <button id="reportPreview" class="px-3 py-1.5 rounded-md text-[12.5px] bg-indigo-600 text-white hover:bg-indigo-500">プレビュー</button>
-          <button id="reportCopy" class="px-3 py-1.5 rounded-md text-[12.5px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800">コピー</button>
-          <button id="reportSave" class="px-3 py-1.5 rounded-md text-[12.5px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800">.md で保存</button>
-        </div>
-      </div>
-    </details>
-
+    <!-- 右パネルの下に畳んであった 履歴・ピン留め・凡例 は、上部バーの浮遊パネル（details.pop）に置く。
+         パネルの下は視線が届かず、本文の高さも奪っていた（指摘）。レポートは中央の操作列（集中・表示の隣）にある。 -->
     <details id="dHist" class="pop shrink-0">
-      <summary class="px-3 h-9 flex items-center gap-1.5 rounded-md text-[13px] border border-stone-300 dark:border-stone-600
+      <summary class="px-2.5 h-8 flex items-center gap-1.5 rounded-md text-[12.5px] border border-stone-300 dark:border-stone-600
                       hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer select-none list-none" title="中心の移動の履歴（木）。Ctrl+Z / Ctrl+Y で上り下り">履歴 <span id="histCount" class="text-[10.5px] text-stone-400"></span> ▾</summary>
       <div class="popPanel w-[min(360px,92vw)]">
         <div class="flex items-center gap-2">
@@ -199,7 +190,7 @@
     </details>
 
     <details id="dPin" class="pop shrink-0">
-      <summary class="px-3 h-9 flex items-center gap-1.5 rounded-md text-[13px] border border-stone-300 dark:border-stone-600
+      <summary class="px-2.5 h-8 flex items-center gap-1.5 rounded-md text-[12.5px] border border-stone-300 dark:border-stone-600
                       hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer select-none list-none" title="閲覧状態のピン留め（p で追加）">📌 ピン <span id="pinCount" class="text-[10.5px] text-stone-400"></span> ▾</summary>
       <div class="popPanel w-[min(380px,92vw)]">
         <div class="flex items-center gap-1.5 flex-wrap">
@@ -217,11 +208,11 @@
       </div>
     </details>
 
-    <button id="btnData" class="shrink-0 px-3 h-9 rounded-md text-[13px] border border-stone-300 dark:border-stone-600
+    <button id="btnData" class="shrink-0 px-2.5 h-8 rounded-md text-[12.5px] border border-stone-300 dark:border-stone-600
             hover:bg-stone-100 dark:hover:bg-stone-800">データ</button>
 
     <details id="dHelp" class="pop shrink-0">
-      <summary class="w-9 h-9 flex items-center justify-center rounded-md text-[14px] text-stone-500
+      <summary class="w-8 h-8 flex items-center justify-center rounded-md text-[13px] text-stone-500
                       hover:bg-stone-100 dark:hover:bg-stone-800 cursor-pointer select-none list-none" title="凡例と操作">?</summary>
       <div class="popPanel w-[min(520px,92vw)] text-[11px] text-stone-500 dark:text-stone-400 leading-relaxed">
           <div><span style="color:#4F46E5">━</span> 型依存
@@ -260,8 +251,8 @@
           <div><kbd>/</kbd>検索 <kbd>t</kbd>型のみ <kbd>m</kbd>粒度 <kbd>v</kbd>下錐 <kbd>p</kbd>ピン <kbd>0</kbd>全体 <kbd>f</kbd>集中 <kbd>[</kbd><kbd>]</kbd>見た宣言の前後</div>
       </div>
     </details>
-    <button id="btnSideR" class="shrink-0 w-9 h-9 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-500 text-[16px]" title="右パネルの開閉">▤</button>
-    <button id="themeBtn" class="shrink-0 w-9 h-9 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-[15px]" title="配色切替">
+    <button id="btnSideR" aria-pressed="true" class="shrink-0 w-8 h-8 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-500 text-[15px]" title="右パネルを開く／閉じる">▤</button>
+    <button id="themeBtn" class="shrink-0 w-8 h-8 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 text-[14px]" title="配色切替">
       <span id="themeIcon">☀</span></button>
   </header>
 
@@ -350,6 +341,11 @@
             </div>
           </div>
         </details>
+
+        <!-- レポート。中央（グラフ）についての操作なので、集中・表示の隣に置く。押すと右端の差し込み
+             （dialog#reportDlg）が開き、左の列で主語・章・深さを選びながら右の列のプレビューを読める -->
+        <button id="btnReport" class="px-1.5 py-0.5 rounded-md text-[11.5px] border border-stone-300 dark:border-stone-600
+                hover:bg-stone-100 dark:hover:bg-stone-800 shrink-0" title="証明の構造を Markdown のレポートにして写す・保存する">📄 レポート</button>
       </div>
 
       <!-- グラフ -->
@@ -431,21 +427,36 @@
   </div>
 </dialog>
 
-<!-- ============ レポートのプレビュー ============ -->
-<dialog id="reportDlg" class="rounded-xl p-0 w-[min(900px,94vw)] bg-white dark:bg-stone-900
-        text-stone-900 dark:text-stone-100 shadow-2xl border border-stone-200 dark:border-stone-700">
-  <div class="p-4 space-y-3">
-    <div class="flex items-center gap-2">
-      <h2 class="text-[15px] font-medium">レポート</h2>
-      <span id="reportDlgInfo" class="text-[11.5px] text-stone-500"></span>
-      <span class="flex-1"></span>
-      <button id="reportDlgCopy" class="px-3 py-1.5 rounded-md text-[12.5px] bg-indigo-600 text-white hover:bg-indigo-500">コピー</button>
-      <button id="reportDlgSave" class="px-3 py-1.5 rounded-md text-[12.5px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800">.md で保存</button>
-      <button id="reportDlgClose" class="w-8 h-8 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800">✕</button>
+<!-- ============ レポート ============
+     右端に縦いっぱいの差し込み（モーダルではない。CSS は上の #reportDlg）。左の列が操作（主語・深さ・
+     全章／要約・章の選択。説明は最下部）、右の列がプレビュー。章を変えるとその場で作り直す。
+     外を押す・Esc・✕ で閉じる。 -->
+<dialog id="reportDlg" class="p-0 bg-white dark:bg-stone-900 text-stone-900 dark:text-stone-100 shadow-2xl
+        border-l border-stone-200 dark:border-stone-700">
+  <div class="h-full flex flex-col">
+    <div class="shrink-0 px-3 py-1.5 flex items-center gap-2 border-b border-stone-200 dark:border-stone-700">
+      <h2 class="text-[13px] font-medium shrink-0">レポート</h2>
+      <span id="reportDlgInfo" class="text-[11px] text-stone-500 truncate min-w-0 flex-1"></span>
+      <button id="reportDlgCopy" class="px-2.5 py-1 rounded-md text-[12px] bg-indigo-600 text-white hover:bg-indigo-500 shrink-0">コピー</button>
+      <button id="reportDlgSave" class="px-2.5 py-1 rounded-md text-[12px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800 shrink-0">.md で保存</button>
+      <button id="reportDlgClose" class="w-7 h-7 rounded-md hover:bg-stone-100 dark:hover:bg-stone-800 shrink-0" title="閉じる (Esc)">✕</button>
     </div>
-    <textarea id="reportText" readonly spellcheck="false" rows="28"
-      class="w-full font-mono text-[11.5px] leading-relaxed p-2 rounded-lg bg-stone-50 dark:bg-stone-950
-             border border-stone-200 dark:border-stone-700 outline-none"></textarea>
+    <div class="flex-1 min-h-0 flex">
+      <aside id="reportOpts" class="w-[250px] shrink-0 overflow-y-auto p-2 space-y-2 text-[11.5px] border-r border-stone-200 dark:border-stone-700">
+        <div class="flex items-center gap-1 flex-wrap" id="reportSubject"></div>
+        <div class="flex items-center gap-1.5 flex-wrap text-stone-500">
+          <span>導出図の深さ</span>
+          <span id="reportDepth" class="flex gap-0.5 p-0.5 rounded-lg bg-stone-200/70 dark:bg-stone-800"></span>
+          <span class="flex-1"></span>
+          <button id="reportAll" class="px-2 py-0.5 rounded-md text-[11px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800" title="全ての章（注記を除く）">全章</button>
+          <button id="reportNone" class="px-2 py-0.5 rounded-md text-[11px] border border-stone-300 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-800" title="主張・型依存・公理の由来・導出図・計量">要約</button>
+        </div>
+        <div id="reportSections" class="grid grid-cols-1 gap-y-0.5"></div>
+        <div class="text-[10.5px] text-stone-400 leading-relaxed pt-2 border-t border-stone-200 dark:border-stone-700">事実は元の依存グラフで測り、型依存／値依存・公理の由来・導出図・基盤・原子・境界・経路を Markdown にまとめる。主語が選択のときは中心との経路（順序区間）が入る。章や深さを変えるとプレビューはその場で作り直される。</div>
+      </aside>
+      <textarea id="reportText" readonly spellcheck="false"
+        class="flex-1 min-h-0 min-w-0 font-mono text-[11.5px] leading-relaxed p-3 bg-stone-50 dark:bg-stone-950 outline-none resize-none"></textarea>
+    </div>
   </div>
 </dialog>
 
