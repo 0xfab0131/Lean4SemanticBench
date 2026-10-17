@@ -137,7 +137,8 @@
     el.addEventListener("pointermove", (e) => {
       if (!start) return;
       const d = which === "left" ? (e.clientX - start.x) : (start.x - e.clientX);
-      target.style.width = Math.max(190, Math.min(760, start.w + d)) + "px";
+      target.style.width = Math.max(which === "left" ? 220 : 280, Math.min(760, start.w + d)) + "px";
+      fitWidths();
     });
     const end = () => {
       if (!start) return;
@@ -149,7 +150,7 @@
     el.addEventListener("pointerup", end);
     el.addEventListener("pointercancel", end);
     el.addEventListener("dblclick", () => {
-      target.style.width = which === "left" ? "264px" : "312px";
+      target.style.width = which === "left" ? "280px" : "330px";
       localStorage.setItem("ldr-w-" + which, target.style.width);
     });
   }
@@ -227,10 +228,13 @@
     for (const which of ["left", "right"]) {
       const el = which === "left" ? $("sidebar") : $("sideR");
       const saved = parseInt(localStorage.getItem("ldr-w-" + which) || "", 10);
-      const cap = Math.round(window.innerWidth * (which === "left" ? 0.24 : 0.34));
-      // 既定の幅。左は絞り込みの札二つが一行に、右は依存のタブ六つが一行に収まる幅（実測）
+      /* 下限は内容の自然な幅（左: 絞り込みの札、右: 依存のタブ列）。上限は画面幅に対する割合だが、
+         下限より小さくはしない（190px まで縮めると札が欄からはみ出した。実測）。
+         幅が足りない画面では左の一覧は重ね表示（drawer）になるので、ここでの上限は三枚並ぶ画面の話 */
+      const min = which === "left" ? 220 : 280;
+      const cap = Math.max(min, Math.round(window.innerWidth * (which === "left" ? 0.24 : 0.34)));
       const def = which === "left" ? 280 : 330;
-      el.style.width = Math.max(190, Math.min(Number.isFinite(saved) ? saved : def, cap)) + "px";
+      el.style.width = Math.max(min, Math.min(Number.isFinite(saved) ? saved : def, cap)) + "px";
     }
 
     // 右パネルは「見ている宣言」のプレビューから始める（依存の一覧はタブで切り替える）
@@ -433,6 +437,8 @@
 
     // パネルの開閉
     $("btnSide").addEventListener("click", () => toggleAside($("sidebar"), "left"));
+    // 重ね表示の背面を押すと一覧を閉じる
+    $("drawerBackdrop").addEventListener("click", () => toggleAside($("sidebar"), "left"));
     $("btnSideR").addEventListener("click", () => toggleAside($("sideR"), "right"));
     $("btnFocus").addEventListener("click", toggleFocus);
   }
@@ -514,22 +520,54 @@
   /* 幅に応じてパネルを自動で畳む。
      狭いところに三枚並べても、どれも読めない幅になるだけなので、
      優先度の低い側から外す。利用者が明示的に開いたものは尊重する。 */
-  const BP = { both: 1180, right: 820 };
+  /* 幅の配分。三枚を並べるのは、左右を下限（左 220・右 280）まで縮めても中央に 480px 残る幅から
+     （220 + 280 + 480 + 帯 10 = 990）。並べるときは中央を 480px 以上に保ち、足りない分は右 → 左の順に
+     下限まで縮める（保存された幅はそのまま、画面幅に応じて毎回ここで詰める）。
+     OS の拡大率が高い画面では CSS 上の幅が 1000px 前後になり、三枚で左 190・右 326・中央 434 に
+     潰れて中央の見出しも操作列も読めなかった（実測）。 */
+  const BP = { both: 990, right: 820 };
+  const MIN = { left: 220, right: 280, center: 480 };
   let autoState = null, userTouched = { left: false, right: false };
+  function fitWidths() {
+    const w = window.innerWidth;
+    const side = $("sidebar"), right = $("sideR");
+    const L = !side.classList.contains("hidden") && !side.classList.contains("drawer");
+    const R = !right.classList.contains("hidden");
+    let l = L ? (parseInt(side.style.width, 10) || 280) : 0;
+    let r = R ? (parseInt(right.style.width, 10) || 330) : 0;
+    let over = l + r + MIN.center + (L ? 5 : 0) + (R ? 5 : 0) - w;
+    if (over > 0 && R) { const d = Math.min(over, Math.max(0, r - MIN.right)); r -= d; over -= d; }
+    if (over > 0 && L) { const d = Math.min(over, Math.max(0, l - MIN.left)); l -= d; over -= d; }
+    if (L) side.style.width = l + "px";
+    if (R) right.style.width = r + "px";
+  }
+  /* 三枚が並ばない幅（BP.both 未満）で一覧を開いたときは、中央を押し潰さずキャンバスの上に重ねる
+     （drawer。CSS は index.html の #sidebar.drawer）。背面を暗くし、押せば閉じる。重ねている間は幅の帯も出さない。 */
+  function syncDrawer() {
+    const side = $("sidebar"), rz = document.querySelector('[data-resize="left"]'), bd = $("drawerBackdrop");
+    const drawer = window.innerWidth < BP.both && !focusOn;
+    side.classList.toggle("drawer", drawer);
+    if (rz) rz.classList.toggle("hidden", drawer || side.classList.contains("hidden"));
+    if (bd) bd.classList.toggle("hidden", !(drawer && !side.classList.contains("hidden")));
+  }
   function applyResponsive() {
     if (focusOn) return;          // 集中表示は自動制御より優先する
     const w = window.innerWidth;
+    syncDrawer();
     const want = w >= BP.both ? "both" : w >= BP.right ? "right" : "none";
-    if (want === autoState) return;
-    autoState = want;
-    const setSide = (el, which, show) => {
-      if (userTouched[which]) return;
-      el.classList.toggle("hidden", !show);
-      const rz = document.querySelector(`[data-resize="${which}"]`);
-      if (rz) rz.classList.toggle("hidden", !show);
-    };
-    setSide($("sidebar"), "left", want === "both");
-    setSide($("sideR"), "right", want !== "none");
+    if (want !== autoState) {
+      autoState = want;
+      const setSide = (el, which, show) => {
+        if (userTouched[which]) return;
+        el.classList.toggle("hidden", !show);
+        const rz = document.querySelector(`[data-resize="${which}"]`);
+        if (rz) rz.classList.toggle("hidden", !show);
+      };
+      setSide($("sidebar"), "left", want === "both");
+      setSide($("sideR"), "right", want !== "none");
+      syncDrawer();
+    }
+    fitWidths();
   }
 
   function toggleAside(el, which) {
@@ -537,6 +575,8 @@
     const hidden = el.classList.toggle("hidden");
     const rz = document.querySelector(`[data-resize="${which}"]`);
     if (rz) rz.classList.toggle("hidden", hidden);
+    if (which === "left") syncDrawer();
+    fitWidths();
   }
 
   /* 集中表示。左の一覧と操作列を畳み、中央のグラフと右のプレビューだけにする。
@@ -549,6 +589,7 @@
     if (focusOn) {
       focusSaved = { side: side.classList.contains("hidden"), r: $("sideR").style.width };
       side.classList.add("hidden");
+      side.classList.remove("drawer");
       if (rz) rz.classList.add("hidden");
       // 操作列は消さず、キャンバスの上に浮かせて残す。詳しい制御は「表示 ▾」に畳んである
       if (bar) bar.classList.add("focus-min");

@@ -910,13 +910,18 @@
                <span class="text-stone-400">（別のデータで選んだ宣言か、ピンの復元先が無い）</span></div>`;
         return;
       }
-      /* 二行の固定構成。一行目は名前（長ければ省略。完全名は title と上部バー・右パネルにある）と種別・所在、
-         二行目は印と公理。全部を一つの折り返し行に置くと、長い名前が三行を使い、グラフの高さを奪った（実測）。 */
+      /* 二行の固定構成。一行目は名前、二行目は種別・所在・印・公理。全部を一つの折り返し行に置くと、
+         長い名前が三行を使い、グラフの高さを奪った（実測）。
+         名前は一覧の行と同じ規則で描く: 幅が足りなければ接頭辞（名前空間）を先に縮め、末尾成分は必ず見せる
+         （単純な省略だと `Cslib.Crypt…` となり、肝心の宣言名が消えた。実測）。完全名は title に残す。 */
+      const { prefix, last } = splitName(LDR.sig.userName(name));
       el.innerHTML = `
-        <div class="flex items-center gap-2 min-w-0">
+        <div class="flex items-center gap-2 min-w-0" title="${esc(name)}">
           <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-indigo-600 text-white shrink-0" title="グラフの中心。右パネルは選択中の宣言を出す（追従）か、この中心に固定できる">中心</span>
           ${dot(nd.kind, 8)}
-          <span class="font-mono text-[12.5px] font-medium truncate min-w-0 flex-1" title="${esc(name)}">${esc(name)}</span>
+          <span class="font-mono text-[12.5px] font-medium min-w-0 flex-1 flex items-baseline">
+            ${prefix ? `<span class="truncate text-stone-400 dark:text-stone-500 font-normal" style="flex-shrink:999">${esc(prefix)}.</span>` : ""}
+            <span class="min-w-0 truncate" style="flex-shrink:1">${esc(last)}</span></span>
         </div>
         <div class="flex items-center gap-1.5 flex-wrap mt-1">
           <span class="text-[10px] px-1.5 py-0.5 rounded-sm bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 shrink-0">${kinfo(nd.kind).ja}</span>
